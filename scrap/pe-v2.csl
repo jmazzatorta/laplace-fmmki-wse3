@@ -1,0 +1,377 @@
+param memcpy_params : comptime_struct;
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// Number of cells over one side of mesh (power of 2, max 64)
+param cells_per_side : u16;
+
+// Physical range of the domain 
+param prob_range : f32;
+
+// Max bodies on one PE
+param max_bodies_pe : u16;
+
+// Physical dimension of one cell
+param cell_size : f32;
+
+// Tree height
+const TREE_H : u8 = 6;
+
+// Cell id and coordinates
+param morton_id : u32;
+param cell_x : u16;
+param cell_y : u16;
+param cell_z : u16;
+
+// Center coordinates [0,1)
+const center_x : f32 = (@as(f32, cell_x) + 0.5) / @as(f32, cells_per_side);
+const center_y : f32 = (@as(f32, cell_y) + 0.5) / @as(f32, cells_per_side);
+const center_z : f32 = (@as(f32, cell_z) + 0.5) / @as(f32, cells_per_side);
+
+// Function to get lowest tree level on pe
+fn get_pe_min_level(morton : u32) u8 {
+    var level: u8 = 6;
+    var m = morton;
+    while (m & 0x7 == 0 and level > 0) {
+        level -= 1;
+        m = m >> 3;
+    }
+    return level;
+}
+const pe_min_level : u8 = get_pe_min_level(morton_id);
+
+// Function to get the local 0-7 ID for a specific level
+fn get_level_id(morton : u32, l : u8) u32 {
+    const shift = (TREE_H - l) * 3;
+    return (morton >> shift) & 0x7;
+}
+
+// Multipole constants
+param P : u16;
+param N_COEFFS : u16;
+
+// --- COLORS and FABRIC QUEUES ---
+
+// Colors upward phase
+param color_u1 : color; 
+param color_u2 : color; 
+param color_u3 : color;
+param color_u4 : color; 
+param color_u5 : color; 
+param color_u6 : color;
+
+const colors_up = [6]color{color_u1, color_u2, color_u3, color_u4, color_u5, color_u6};
+
+// Colors downward phase
+param color_d1 : color; 
+param color_d2 : color; 
+param color_d3 : color;
+param color_d4 : color; 
+param color_d5 : color; 
+param color_d6 : color;
+
+const colors_down = [6]color{color_d1, color_d2, color_d3, color_d4, color_d5, color_d6};
+
+// Queue bindings
+const iq = [6]input_queue{
+    @get_input_queue(2), @get_input_queue(3), @get_input_queue(4),
+    @get_input_queue(5), @get_input_queue(6), @get_input_queue(7),
+};
+const oq = [6]output_queue{
+    @get_output_queue(2), @get_output_queue(3), @get_output_queue(4),
+    @get_output_queue(5), @get_output_queue(6), @get_output_queue(7),
+};
+
+// --- BUFFERS ---
+
+// Bodies buffer (host -> device)
+const b_buf_len : u16 = 2 + max_bodies_pe * 4;
+var bodies = @zeros([b_buf_len]u32); 
+var bodies_symbol : [*]u32 = &bodies;
+
+// Receive buffers (ping-pong)
+var rx_1_r = @zeros([N_COEFFS]f32);
+var rx_1_c = @zeros([N_COEFFS]f32);
+var rx_2_r = @zeros([N_COEFFS]f32);
+var rx_2_c = @zeros([N_COEFFS]f32);
+
+// Coefficients buffers
+var g_coeff_r = @zeros([N_COEFFS]f32);
+var g_coeff_c = @zeros([N_COEFFS]f32);
+
+// Communication token buffers
+var tx_token_buf = @zeros([1]u32);
+var rx_token_buf = @zeros([1]u32);
+
+// Temporary buffers for m2m phase
+var parent_r = @zeros([N_COEFFS]f32);
+var parent_c = @zeros([N_COEFFS]f32);
+
+// --- DSDs ---
+
+// Fabric DSDs generators 
+fn get_up_out_dsd(comptime l: u8, extent : u16) fabout_dsd {
+    return @get_dsd(fabout_dsd, .{
+        .fabric_color = colors_up[l], 
+        .extent = extent, 
+        .output_queue = oq[l] 
+    });
+}
+fn get_up_in_dsd(comptime l: u8, extent : u16) fabin_dsd {
+    return @get_dsd(fabin_dsd, .{ 
+        .fabric_color = colors_up[l], 
+        .extent = extent, 
+        .input_queue = iq[l] 
+    });
+}
+fn get_down_out_dsd(comptime l: u8, extent : u16) fabout_dsd {
+    return @get_dsd(fabout_dsd, .{ 
+        .fabric_color = colors_down[l], 
+        .extent = extent, 
+        .output_queue = oq[l] 
+    });
+}
+fn get_down_in_dsd(comptime l: u8, extent : u16) fabin_dsd {
+    return @get_dsd(fabin_dsd, .{ 
+        .fabric_color = colors_down[l], 
+        .extent = extent, 
+        .input_queue = iq[l] 
+    });
+}
+
+// Data buffers DSDs
+const mem_rx_1_r = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_COEFFS} -> rx_1_r[i] });
+const mem_rx_1_c = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_COEFFS} -> rx_1_c[i] });
+const mem_rx_2_r = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_COEFFS} -> rx_2_r[i] });
+const mem_rx_2_c = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_COEFFS} -> rx_2_c[i] });
+
+// Token DSDs
+const mem_tx_token = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_token_buf[i] });
+const mem_rx_token = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_token_buf[i] });
+
+// Coefficients DSDs (for send phase)
+const mem_tx_r = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_COEFFS} -> g_coeff_r[i] });
+const mem_tx_c = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_COEFFS} -> g_coeff_c[i] });
+
+// --- UPWARD LEVEL FUNCTION  ---
+
+fn upward_level(comptime l: u8) void {
+
+    // Compute node ID on level l
+    const curr_level_id = get_level_id(morton_id, l);
+
+    // Compute fabric DSDs on level l 
+    const fab_in_data = get_up_in_dsd(l, N_COEFFS); 
+    const fab_out_token = get_down_out_dsd(l, 1);
+
+    // Reset parent buffers for aggregation
+    for (@range(u16, 0, N_COEFFS)) |i| {
+        parent_r[i] = 0.0;
+        parent_c[i] = 0.0;
+    }
+
+    // m2m_local(curr_level_id, &parent_r, &parent_c, &g_coeff_r, &g_coeff_c);
+
+    // Receive from 7 child PEs ---
+    var n_processed : u16 = 0;
+    var current_target : u32 = 1;
+    var next_target : u32 = 2;
+
+    // Request first child 
+    tx_token_buf[0] = current_target;
+    @fmovs(fab_out_token, mem_tx_token);
+
+    @fmovs(mem_rx_1_r, fab_in_data);
+    @fmovs(mem_rx_1_c, fab_in_data);
+
+    n_processed += 1;
+
+    // Change buffer next iteration
+    var use_first : bool = false; 
+
+    // Request child n+1 (fabric) while computing child n (alu)
+    while (n_processed < 7) {
+
+        // Send communication token to next target
+        tx_token_buf[0] = next_target;
+        @fmovs(fab_out_token, mem_tx_token);
+
+        // Receive in alternating buffers
+        if (use_first) {
+            @fmovs(mem_rx_1_r, fab_in_data);
+            @fmovs(mem_rx_1_c, fab_in_data);
+            // m2m_translate(current_target, &parent_r, &parent_c, &rx_2_r, &rx_2_c);
+        } else {
+            @fmovs(mem_rx_2_r, fab_in_data);
+            @fmovs(mem_rx_2_c, fab_in_data);
+            // m2m_translate(current_target, &parent_r, &parent_c, &rx_1_r, &rx_1_c);
+        }
+
+        current_target = next_target;
+        next_target += 1;
+        use_first = !use_first;
+        n_processed += 1;
+    }
+
+    // Calculate M2M for last received child
+    // Last data is in rx_2
+    // m2m_translate(current_target, &parent_r, &parent_c, &rx_2_r, &rx_2_c);
+
+    // Update global coefficients for the next upward jump 
+    for (@range(u16, 0, N_COEFFS)) |i| {
+        g_coeff_r[i] = parent_r[i];
+        g_coeff_c[i] = parent_c[i];
+    }
+}
+
+// --- SEND TO PARENT FUNCTION ---
+
+fn send_to_parent(comptime l: u8) void {
+
+    // Decode level inner id from morton id
+    const pe_level_id = get_level_id(morton_id, l + 1);
+
+    // Compute fabric DSDs 
+    const fab_in_token = get_down_in_dsd(l, 1);
+    const fab_out_data = get_up_out_dsd(l, N_COEFFS);
+
+    // Active listening on father color
+    while (true) {
+
+        // Listening for father communication token broadcast
+        @fmovs(mem_rx_token, fab_in_token);
+
+        // Compare communication token with level inner id
+        // If match send data
+        if (rx_token_buf[0] == pe_level_id) {
+            @fmovs(fab_out_data, mem_tx_r);
+            @fmovs(fab_out_data, mem_tx_c);
+            break; 
+        }
+    }
+}
+
+// --- FMM MAIN FUNCTION ---
+
+fn upward_phase() void {
+    
+    // Calculate multipole from leaf level particles
+    compute_p2m();
+
+    // RECEIVE PHASE
+    // Compiler generates code for levels in which PE is father
+    // Iterates from bottom (level 5) to top (level 0) via TREE_H-1-cl
+    for (@range(u8, 0, TREE_H)) |cl| {
+        const l = TREE_H - 1 - cl;
+        if (l >= pe_min_level) {
+            upward_level(l);
+        }
+    }
+
+    // SEND PHASE
+    // Send to parent only if PE is not root
+    if (pe_min_level > 0) {
+        send_to_parent(pe_min_level - 1);
+    }
+}
+
+fn compute_p2m() void {
+    
+    // Clean coefficients buffers
+    for (@range(u16, 0, N_COEFFS)) |i| {
+        g_coeff_r[i] = 0.0;
+        g_coeff_c[i] = 0.0;
+    }
+
+    // Extract the count of the body from buffer
+    const count : u16 = @as(u16, bodies[1]);
+    const bodies_offset : u16 = 2;
+
+    for (@range(u16, count)) |b| {
+
+        var i_b : u16 = bodies_offset + b * 4;
+
+        // Calculate bodies distances from the center of the cell 
+        var dx : f32 = @bitcast(f32, bodies[i_b])     - center_x;
+        var dy : f32 = @bitcast(f32, bodies[i_b + 1]) - center_y;
+        var dz : f32 = @bitcast(f32, bodies[i_b + 2]) - center_z;
+        var q  : f32 = @bitcast(f32, bodies[i_b + 3]);
+
+        var r2 : f32 = dx * dx + dy * dy + dz * dz;
+
+        // Initialize variables for the diagonal {m,m} starting from {0,0}
+        var mm_r : f32 = 1.0;
+        var mm_c : f32 = 0.0;
+
+        // Initialize counter for linearized buffer
+        var i_m : u16 = 0;
+
+        // External cicle over m
+        for (@range(i16, 0, P + 1)) |m| {
+
+            // Calculate diagonal value {m,m}
+            if (m > 0) {
+                var k_diag : f32 = -1.0 / (2.0 * @as(f32, m));
+                var temp_r : f32 = k_diag * (dx * mm_r - dy * mm_c);
+                var temp_c : f32 = k_diag * (dy * mm_r + dx * mm_c);
+                mm_r = temp_r;
+                mm_c = temp_c;
+            }
+
+            // Accumulate diagonal values in coefficients buffer
+            g_coeff_r[i_m] += q * mm_r;
+            g_coeff_c[i_m] += q * mm_c;
+            
+            i_m += 1; 
+
+            // Initialize variables for previous values
+            var prev2_r : f32 = 0.0;
+            var prev2_c : f32 = 0.0;
+            var prev1_r : f32 = mm_r;
+            var prev1_c : f32 = mm_c;
+
+            // Inner cicle over l
+            for (@range(i16, m + 1, P + 1)) |l| {
+
+                var k_lm : f32 = 1.0 / @as(f32, l * l - m * m);
+                var z_k : f32 = (2.0 * @as(f32, l) - 1.0) * dz;
+
+                var current_r : f32 = k_lm * (z_k * prev1_r - r2 * prev2_r);
+                var current_c : f32 = k_lm * (z_k * prev1_c - r2 * prev2_c);
+
+                g_coeff_r[i_m] += q * current_r;
+                g_coeff_c[i_m] += q * current_c;
+
+                prev2_r = prev1_r;
+                prev2_c = prev1_c;
+                prev1_r = current_r;
+                prev1_c = current_c;
+
+                i_m += 1; 
+            }
+        }
+    }
+}
+
+// --- COMPTIME ---
+
+comptime {
+
+    // Initialize queues for levels in which PE is father
+    var l: u8 = pe_min_level;
+    while (l <= 5) {
+        @initialize_queue(iq[l], .{ .color = colors_up[l] });
+        @initialize_queue(oq[l], .{ .color = colors_down[l] });
+        l += 1;
+    }
+
+    // Initialize queues for level in which PE is not father 
+    if (pe_min_level > 0) {
+        const parent_lvl = pe_min_level - 1;
+        @initialize_queue(oq[parent_lvl], .{ .color = colors_up[parent_lvl] });
+        @initialize_queue(iq[parent_lvl], .{ .color = colors_down[parent_lvl] });
+    }
+
+    // Export symbols to host
+    @export_symbol(bodies_symbol, "bodies");
+    @export_symbol(upward_phase);
+}
