@@ -2,7 +2,9 @@
 param cells_per_side : u16;
 
 // Physical range of the domain 
-param prob_range : f32;
+param prob_range_u16 : u16;
+const prob_range     : f32 = @as(f32, prob_range_u16);
+// param prob_range : f32;
 
 // Max bodies on one PE
 param max_bodies_pe : u16;
@@ -16,7 +18,8 @@ const cell_size : f32 = prob_range / @as(f32, cells_per_side);
 
 // 2D mesh side length
 // cells_per_side=64 -> BITS=6, MORTON_BITS=18, grid_side=512
-const BITS : u16 = @as(u16, @log(cells_per_side));
+// log(cells_per_side)
+param BITS : u16;
 const MORTON_BITS : u16 = 3 * BITS;
 const grid_side : u16 = @as(u16, 1) << ((MORTON_BITS + 1) / 2);
 
@@ -51,16 +54,16 @@ const memcpy_mod = @import_module("<memcpy/get_params>", .{
     .MEMCPYD2H_1 = color_memcpy_d2h,
 });
 
-fn morton_encode(x : u16, y : u16) u16 {
-    var morton_id : u16 = 0;
-    for (@range(u16,8)) |i| {
+fn morton_encode(x : u16, y : u16) u32 {
+    var morton_id : u32 = 0;
+    for (@range(u16,9)) |i| {
         morton_id |= (( x >> i ) & 1 ) << (i*2);
         morton_id |= (( y >> i ) & 1 ) << (i*2+1);
     }
     return morton_id;
 }
 
-fn morton_decode(m: u16) [3]u16 {
+fn morton_decode(m: u32) [3]u16 {
     var x: u16 = 0;
     var y: u16 = 0;
     var z: u16 = 0;
@@ -113,24 +116,20 @@ layout {
     }
 
     // Routes up
-    const RX_E_TX_W    = .{ .rx = .{EAST},  .tx = .{WEST}  };              // Forward E W
-    const RX_S_TX_N    = .{ .rx = .{SOUTH}, .tx = .{NORTH} };              // Forward S N
-    const RX_E_TX_WR   = .{ .rx = .{EAST},  .tx = .{WEST,RAMP} };          // Nodes on level y axis (w\ forwarding)
-    const RX_E_TX_R    = .{ .rx = .{EAST},  .tx = .{RAMP} };               // Nodes on level y axis (w\out forwarding)
-    const RX_S_TX_WR   = .{ .rx = .{SOUTH}, .tx = .{WEST,RAMP} };          // Nodes on level x axis (w\ forwarding W)
-    const RX_S_TX_WNR  = .{ .rx = .{SOUTH}, .tx = .{WEST,NORTH,RAMP} };    // Nodes on level x axis (w\ forwarding W,N)
-    const RX_S_TX_R    = .{ .rx = .{SOUTH}, .tx = .{RAMP} };               // Nodes on level x axis (w\out forwarding)
-    const RX_ES_TX_R   = .{ .rx = .{EAST, SOUTH}, .tx = .{RAMP} };         // Father receive
+    const RX_E_TX_W    = .{ .rx = .{EAST},  .tx = .{WEST}  };
+    const RX_S_TX_N    = .{ .rx = .{SOUTH}, .tx = .{NORTH} };
+    const RX_E_TX_N    = .{ .rx = .{EAST},  .tx = .{NORTH} };
+    const RX_S_TX_W    = .{ .rx = .{SOUTH}, .tx = .{WEST} };
+    const RX_E_TX_R    = .{ .rx = .{EAST},  .tx = .{RAMP} };
+    const RX_S_TX_R    = .{ .rx = .{SOUTH}, .tx = .{RAMP} };
 
     // Routes down
-    const RX_W_TX_E    = .{ .rx = .{WEST},  .tx = .{EAST}  };             // Forward W E
-    const RX_N_TX_S    = .{ .rx = .{NORTH}, .tx = .{SOUTH} };             // Forward N S
-    const RX_W_TX_ER   = .{ .rx = .{WEST},  .tx = .{EAST,RAMP} };         // Nodes on level y axis (w\ forwarding)
-    const RX_W_TX_R    = .{ .rx = .{WEST},  .tx = .{RAMP} };              // Nodes on level y axis (w\out forwarding)
-    const RX_N_TX_ER   = .{ .rx = .{NORTH}, .tx = .{EAST,RAMP} };         // Nodes on level x axis (w\ forwarding E)
-    const RX_N_TX_ESR  = .{ .rx = .{NORTH}, .tx = .{EAST,SOUTH,RAMP} };   // Nodes on level x axis (w\ forwarding E,S)
-    const RX_N_TX_R    = .{ .rx = .{NORTH}, .tx = .{RAMP} };              // Nodes on level x axis (w\out forwarding)
-    const RX_R_TX_ES   = .{ .rx = .{RAMP}, .tx = .{EAST, SOUTH} };        // Father broadcast
+    const RX_W_TX_E    = .{ .rx = .{WEST},  .tx = .{EAST} };
+    const RX_N_TX_S    = .{ .rx = .{NORTH}, .tx = .{SOUTH} };
+    const RX_W_TX_ER   = .{ .rx = .{WEST},  .tx = .{EAST,RAMP} };
+    const RX_N_TX_ER   = .{ .rx = .{NORTH}, .tx = .{EAST,RAMP} };     
+    const RX_N_TX_ESR  = .{ .rx = .{NORTH}, .tx = .{EAST,SOUTH,RAMP} };
+    const RX_R_TX_ES   = .{ .rx = .{RAMP}, .tx = .{EAST, SOUTH} };
 
     // Block distances per level
     const b_dist_y = [6]u16{512,128,64,16,8,2};
@@ -140,103 +139,111 @@ layout {
     const lev_col_up   = [6]color{ color_U1, color_U2, color_U3, color_U4, color_U5, color_U6 };
     const lev_col_down = [6]color{ color_D1, color_D2, color_D3, color_D4, color_D5, color_D6 };
 
-    // Setting color configs for every PE
-    var lev_fwd_h : u8;
-    var lev_fwd_v : u8;
 
     for (@range(u16, grid_side)) |pe_y| {
 
-        // PE is in horizontal lane of all tree levels >= lev_fwd_h
-        for (@range(u8, 6)) |l| {
-            if (pe_y % b_dist_y[l] == 0) {
-                lev_fwd_h = l;
-                break;
-            }
-        }
-
         for (@range(u16, grid_side)) |pe_x| {
 
-            // PE is in vertical lane of all tree levels >= lev_fwd_v
-            for (@range(u8, 6)) |l| {
-                if (pe_x % b_dist_x[l] == 0) {
-                    lev_fwd_v = l;
-                    break;
-                }
-            }
+            // Boolean variable to track the rotation of rectangle
+            var is_vertical : bool = true;
 
             // Loop over each level of the tree
             for (@range(u8, 6)) |l| {
                 var c_down : color = lev_col_down[l];
                 var c_up   : color = lev_col_up[l];
 
-                // Do nothing if PE not in vertical nor horizontal lane of l
+                // Position inside the block
+                const local_x = pe_x % b_dist_x[l];
+                const local_y = pe_y % b_dist_y[l];
 
-                // PE in vertical lane but not in horizontal lane of l
-                if (l < lev_fwd_h and l >= lev_fwd_v) {
-                    @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_N_TX_S });
-                    @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_S_TX_N });
-                }
+                // Dimension of the cells in level l (sub-block dimensions)
+                const step_x = if (l % 2 == 0) b_dist_x[l] / 2 else b_dist_x[l] / 4;
+                const step_y = if (l % 2 == 0) b_dist_y[l] / 4 else b_dist_y[l] / 2;
 
-                // PE in horizontal lane but not in vertical lane of l
-                else if (l >= lev_fwd_h and l < lev_fwd_v) {
-                    @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_W_TX_E });
-                    @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_E_TX_W });
-                }
+                // Role flags
+                const is_parent      = (local_x == 0 and local_y == 0);
+                const is_first_col   = (local_x == 0);
+                const is_first_row   = (local_y == 0);
+                const is_last_in_col = (is_first_col and local_y == b_dist_y[l] - step_y);
 
-                // PE in both horizontal and vertical lane of l (is a node)
-                else if (l >= lev_fwd_h and l >= lev_fwd_v) {
+                // PE lanes
+                const on_v_lane = (local_x == 0); 
+                const on_h_lane = (local_y % step_y == 0); 
+                const is_node   = (local_x % step_x == 0 and local_y % step_y == 0);
 
-                    // Position inside the block
-                    const local_x = pe_x % b_dist_x[l];
-                    const local_y = pe_y % b_dist_y[l];
-
-                    // Dimension of the cells in level l (sub-block dimensions)
-                    const step_x = if (l % 2 == 0) b_dist_x[l] / 2 else b_dist_x[l] / 4;
-                    const step_y = if (l % 2 == 0) b_dist_y[l] / 4 else b_dist_y[l] / 2;
-
-                    // Role flags
-                    const is_parent      = (local_x == 0 and local_y == 0);
-                    const is_first_col   = (local_x == 0);
-                    const is_last_in_col = (is_first_col and local_y == b_dist_y[l] - step_y);
-                    const is_last_in_row = (local_x == b_dist_x[l] - step_x);
+                if (is_node) {
 
                     // Downward routing 
                     if (is_parent) {
                         // Father broadcast
-                        @set_color_config(pe_x, pe_y, c_down, RX_R_TX_ES);
+                        @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_R_TX_ES });
                     } else if (is_first_col and !is_last_in_col) {
-                        // Nodes on level x axis (w\ forwarding E,S)
-                        @set_color_config(pe_x, pe_y, c_down, RX_N_TX_ESR);
-                    } else if (is_last_in_col) {
-                        // Nodes on level x axis (w\ forwarding E)
-                        @set_color_config(pe_x, pe_y, c_down, RX_N_TX_ER);
-                    } else if (is_last_in_row) {
-                        // Nodes on level y axis (w\out forwarding)
-                        @set_color_config(pe_x, pe_y, c_down, RX_W_TX_R);
+                        // First column, middle rows 
+                        @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_N_TX_ESR });
+                    } else if (is_first_col and is_last_in_col) {
+                        // First column, last row 
+                        @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_N_TX_ER });
                     } else {
-                        // Nodes on level y axis (w\ forwarding)
-                        @set_color_config(pe_x, pe_y, c_down, RX_W_TX_ER);
+                        // Other columns
+                        @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_W_TX_ER });
                     }
 
-                    // Upward routing
-                    if (is_parent) {
-                        // Father receive
-                        @set_color_config(pe_x, pe_y, c_up, RX_ES_TX_R);
-                    } else if (is_first_col and !is_last_in_col) {
-                        // Nodes on level x axis (w\ forwarding W,N)
-                        @set_color_config(pe_x, pe_y, c_up, RX_S_TX_WNR);
-                    } else if (is_last_in_col) {
-                        // Nodes on level x axis (w\ forwarding W)
-                        @set_color_config(pe_x, pe_y, c_up, RX_S_TX_WR);
-                    } else if (is_last_in_row) {
-                        // Nodes on level y axis (w\out forwarding)
-                        @set_color_config(pe_x, pe_y, c_up, RX_E_TX_R);
+                    if (is_vertical) {
+
+                        // Upward routing
+                        if (is_parent) {
+                            // Father receive
+                            // Modifica a runtime (S -> E)
+                            @set_color_config(pe_x, pe_y, c_up, .{ 
+                                .routes = RX_S_TX_R 
+                                .switches = .{ 
+                                    .pos1 = .{ .rx = .{EAST}, .tx = .{RAMP} }, 
+                                    .ring_mode = true,
+                                    .pop_mode = .{pop_on_advance = true}
+                                }
+                            }); 
+                        } else if (is_first_row) {
+                            // First row, last column 
+                            @set_color_config(pe_x, pe_y, c_up, .{ .routes = RX_S_TX_W });
+                        } else {
+                            // Other columns
+                            @set_color_config(pe_x, pe_y, c_up, .{ .routes = RX_S_TX_N });
+                        }
+
                     } else {
-                        // Nodes on level y axis (w\ forwarding)
-                        @set_color_config(pe_x, pe_y, c_up, RX_E_TX_WR);
+
+                        // Upward routing
+                        if (is_parent) {
+                            // Father receive
+                            // Modifica a runtime (E -> S)
+                            @set_color_config(pe_x, pe_y, c_up, .{ 
+                                .routes = RX_E_TX_R,
+                                .switches = .{ 
+                                    .pos1 = .{ .rx = .{SOUTH}, .tx = .{RAMP} }, 
+                                    .ring_mode = true,
+                                    .pop_mode = .{pop_on_advance = true}
+                                }
+                            }); 
+                        } else if (is_first_col) {
+                            // First column, last row 
+                            @set_color_config(pe_x, pe_y, c_up, .{ .routes = RX_E_TX_N });
+                        } else {
+                            // Other columns
+                            @set_color_config(pe_x, pe_y, c_up, .{ .routes = RX_E_TX_W });
+                        }
                     }
                 }
+
+            } else if (on_v_lane and local_y < b_dist_y[l]) {
+                @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_N_TX_S });
+                @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_S_TX_N });
+
+            } else if (on_h_lane and local_x < b_dist_x[l]) {
+                @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_W_TX_E });
+                @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_E_TX_W });
             }
+
+            is_vertical = !is_vertical;
         }
     }
 }
