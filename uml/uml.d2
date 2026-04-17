@@ -1,0 +1,108 @@
+direction: down
+
+# --- TEMA CATPPUCCIN MACCHIATO ---
+classes: {
+  function: {
+    shape: rectangle
+    style: {fill: "#363a4f"; stroke: "#8aadf4"; font-color: "#cad3f5"; border-radius: 4}
+  }
+  decision: {
+    shape: diamond
+    style: {fill: "#363a4f"; stroke: "#eed49f"; font-color: "#cad3f5"}
+  }
+  task: {
+    shape: hexagon
+    style: {fill: "#363a4f"; stroke: "#c6a0f6"; font-color: "#cad3f5"}
+  }
+  wait_state: {
+    shape: rectangle
+    style: {fill: "#1e2030"; stroke: "#a6da95"; font-color: "#cad3f5"; stroke-dash: 5; border-radius: 8}
+  }
+}
+
+style: {stroke: "#8087a2"}
+
+# --- 1. INIZIO E BIFORCAZIONE (IL FORK) ---
+Start: Inizio Esecuzione {shape: oval; style: {fill: "#8aadf4"; font-color: "#181926"}}
+
+compute_p2m: "compute_p2m()\n(Calcola multipoli foglia)" {class: function}
+
+FORK_RUOLO: "IL PE È PADRE O FIGLIO?\n(pe_min_level <= L)" {class: decision}
+
+Start -> compute_p2m
+compute_p2m -> FORK_RUOLO
+
+# ==========================================
+# RAMO SINISTRO: ESECUZIONE DEL PADRE
+# ==========================================
+
+PADRE_START: "upward_level(L)" {class: function}
+m2m_local: "m2m_local()\n(Aggrega dati propri)" {class: function}
+invia_primo_token: "Richiedi dati al 1° Figlio\n(Token Broadcast)" {class: function}
+attesa_padre: "Hardware in Attesa\n(Il PE Padre dorme)" {class: wait_state}
+
+FORK_RUOLO -> PADRE_START: "SÌ (Ruolo: Padre)" {style.stroke: "#8aadf4"; style.stroke-width: 2}
+PADRE_START -> m2m_local
+m2m_local -> invia_primo_token
+invia_primo_token -> attesa_padre
+
+# Pipeline Asincrona Padre
+task_padre: "m2m_pipeline_task()\n[Risveglio da Rete]" {class: task}
+check_n: "n_processed == ?" {class: decision}
+
+attesa_padre -> task_padre: "Interrupt"
+task_padre -> check_n
+
+# Ramo: Cambia Rotta
+switch_hardware: "Cambia Rotta Hardware\n(Control Wavelet verso pos1)" {class: function}
+check_n -> switch_hardware: "== 3"
+
+# Ramo: Continua a chiedere
+richiedi_prossimo: "pipeline_step()\n(Richiedi prossimo Figlio)" {class: function}
+switch_hardware -> richiedi_prossimo
+check_n -> richiedi_prossimo: "< 7"
+richiedi_prossimo -> attesa_padre: "Torna a dormire"
+
+# Ramo: Fine Livello
+fine_livello: "m2m_translate() finale\nL -= 1" {class: function}
+check_L: "Il PE è Padre\nanche al livello superiore?\n(L >= pe_min_level)" {class: decision}
+
+check_n -> fine_livello: "== 7"
+fine_livello -> check_L
+
+check_L -> PADRE_START: "SÌ (Rimane Padre)"
+# Se non è più Padre, si converte in Figlio passivo
+check_L -> FIGLIO_START: "NO (Diventa Figlio)" {style.stroke-dash: 5}
+
+# ==========================================
+# RAMO DESTRO: ESECUZIONE DEL FIGLIO
+# ==========================================
+
+FIGLIO_START: "send_to_parent(L)" {class: function}
+attesa_figlio: "Hardware in Ascolto\n(Attende Token Rete)" {class: wait_state}
+check_token: "ID Token == Mio ID?" {class: decision}
+invia_dati: "Invia g_coeff_buf\n(verso il Padre)" {class: function}
+
+FORK_RUOLO -> FIGLIO_START: "NO (Ruolo: Figlio)" {style.stroke: "#eed49f"; style.stroke-width: 2}
+FIGLIO_START -> attesa_figlio
+attesa_figlio -> check_token: "Token Arrivato"
+
+check_token -> attesa_figlio: "No (Ignora)"
+check_token -> invia_dati: "Sì"
+invia_dati -> attesa_figlio: "Loop (x7)"
+
+# ==========================================
+# CROSS-COMMUNICATION (LA RETE FISICA)
+# ==========================================
+
+invia_primo_token -> attesa_figlio: "Rete: Token di Richiesta" {
+  style: {stroke-dash: 5; stroke: "#eed49f"; stroke-width: 2}
+}
+
+richiedi_prossimo -> attesa_figlio: "Rete: Token di Richiesta" {
+  style: {stroke-dash: 5; stroke: "#eed49f"; stroke-width: 2}
+}
+
+invia_dati -> attesa_padre: "Rete: Dati Coefficenti" {
+  style: {stroke-dash: 5; stroke: "#a6da95"; stroke-width: 2}
+}

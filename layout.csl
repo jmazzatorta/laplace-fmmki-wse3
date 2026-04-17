@@ -1,10 +1,8 @@
 // Number of cells over one side of mesh (power of 2, max 64)
-param cells_per_side : u16;
+const cells_per_side : u16 = 64;
 
 // Physical range of the domain 
-param prob_range_u16 : u16;
-const prob_range     : f32 = @as(f32, prob_range_u16);
-// param prob_range : f32;
+const prob_range     : f32 = 512.0;
 
 // Max bodies on one PE
 param max_bodies_pe : u16;
@@ -19,7 +17,7 @@ const cell_size : f32 = prob_range / @as(f32, cells_per_side);
 // 2D mesh side length
 // cells_per_side=64 -> BITS=6, MORTON_BITS=18, grid_side=512
 // log(cells_per_side)
-param BITS : u16;
+const BITS : u16 = 6;
 const MORTON_BITS : u16 = 3 * BITS;
 const grid_side : u16 = @as(u16, 1) << ((MORTON_BITS + 1) / 2);
 
@@ -56,9 +54,9 @@ const memcpy_mod = @import_module("<memcpy/get_params>", .{
 
 fn morton_encode(x : u16, y : u16) u32 {
     var morton_id : u32 = 0;
-    for (@range(u16,9)) |i| {
-        morton_id |= (( x >> i ) & 1 ) << (i*2);
-        morton_id |= (( y >> i ) & 1 ) << (i*2+1);
+    for (@range(u16, 9)) |i| {
+        morton_id |= @as(u32, (x >> i) & 1) << (i * 2);
+        morton_id |= @as(u32, (y >> i) & 1) << (i * 2 + 1);
     }
     return morton_id;
 }
@@ -111,7 +109,7 @@ layout {
                         .cell_y = coords_3d[1],
                         .cell_z = coords_3d[2],
                         .memcpy_params = memcpy_mod.get_params(pe_x),
-                        }));
+            }));
         }
     }
 
@@ -160,18 +158,18 @@ layout {
                 const step_x = if (l % 2 == 0) b_dist_x[l] / 2 else b_dist_x[l] / 4;
                 const step_y = if (l % 2 == 0) b_dist_y[l] / 4 else b_dist_y[l] / 2;
 
-                // Role flags
-                const is_parent      = (local_x == 0 and local_y == 0);
-                const is_first_col   = (local_x == 0);
-                const is_first_row   = (local_y == 0);
-                const is_last_in_col = (is_first_col and local_y == b_dist_y[l] - step_y);
-
                 // PE lanes
                 const on_v_lane = (local_x == 0); 
                 const on_h_lane = (local_y % step_y == 0); 
                 const is_node   = (local_x % step_x == 0 and local_y % step_y == 0);
 
                 if (is_node) {
+
+                    // Role flags
+                    const is_parent      = (local_x == 0 and local_y == 0);
+                    const is_first_col   = (local_x == 0);
+                    const is_first_row   = (local_y == 0);
+                    const is_last_in_col = (is_first_col and local_y == b_dist_y[l] - step_y);
 
                     // Downward routing 
                     if (is_parent) {
@@ -195,11 +193,11 @@ layout {
                             // Father receive
                             // Modifica a runtime (S -> E)
                             @set_color_config(pe_x, pe_y, c_up, .{ 
-                                .routes = RX_S_TX_R 
+                                .routes = RX_S_TX_R, 
                                 .switches = .{ 
-                                    .pos1 = .{ .rx = .{EAST}, .tx = .{RAMP} }, 
+                                    .pos1 = .{ .rx = EAST, .tx = RAMP }, 
                                     .ring_mode = true,
-                                    .pop_mode = .{pop_on_advance = true}
+                                    .pop_mode = .{ .pop_on_advance = true}
                                 }
                             }); 
                         } else if (is_first_row) {
@@ -219,9 +217,9 @@ layout {
                             @set_color_config(pe_x, pe_y, c_up, .{ 
                                 .routes = RX_E_TX_R,
                                 .switches = .{ 
-                                    .pos1 = .{ .rx = .{SOUTH}, .tx = .{RAMP} }, 
+                                    .pos1 = .{ .rx = SOUTH, .tx = RAMP }, 
                                     .ring_mode = true,
-                                    .pop_mode = .{pop_on_advance = true}
+                                    .pop_mode = .{ .pop_on_advance = true}
                                 }
                             }); 
                         } else if (is_first_col) {
@@ -232,18 +230,18 @@ layout {
                             @set_color_config(pe_x, pe_y, c_up, .{ .routes = RX_E_TX_W });
                         }
                     }
+
+                } else if (on_v_lane and local_y < b_dist_y[l]) {
+                    @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_N_TX_S });
+                    @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_S_TX_N });
+
+                } else if (on_h_lane and local_x < b_dist_x[l]) {
+                    @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_W_TX_E });
+                    @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_E_TX_W });
                 }
 
-            } else if (on_v_lane and local_y < b_dist_y[l]) {
-                @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_N_TX_S });
-                @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_S_TX_N });
-
-            } else if (on_h_lane and local_x < b_dist_x[l]) {
-                @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_W_TX_E });
-                @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_E_TX_W });
+                is_vertical = !is_vertical;
             }
-
-            is_vertical = !is_vertical;
         }
     }
 }

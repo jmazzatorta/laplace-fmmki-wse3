@@ -99,20 +99,6 @@ const oq = [6]output_queue{
 };
 
 
-// --- SWITCHES ---
-
-// Layout module to runtime configs
-const layout = @import_module("<layout>");
-
-const advance = layout.encode_single_payload(
-    layout.switch_config.cmd.advance, true, .{}, 0
-);
-
-// Mettiamo il comando in un buffer in memoria e creiamo un DSD per leggerlo
-var cw_buf = [1]u32{ cw_advance };
-const mem_cw_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> cw_buf[i] });
-
-
 // --- BUFFERS ---
 
 // Bodies buffer (host -> device)
@@ -149,41 +135,45 @@ var target_list = [7]u32{1,4,5,2,3,6,7};
 var use_first : bool = true; 
 
 
-// --- ROUTE SWITCH VARS ---
-
-param to_switch;
-const RX_S_TX_N = .{ .rx = .{SOUTH}, .tx = .{NORTH} }; // Default
-const RX_E_TX_N = .{ .rx = .{EAST},  .tx = .{NORTH} };
-
 // --- DSDs ---
 
 // Fabric DSDs generators 
-fn get_up_out_dsd(comptime l: u8, extent : u16) fabout_dsd {
+fn get_up_out_dsd(comptime l: u8, comptime extent : u16) fabout_dsd {
     return @get_dsd(fabout_dsd, .{
         .fabric_color = colors_up[l], 
         .extent = extent, 
         .output_queue = oq[l] 
     });
 }
-fn get_up_in_dsd(comptime l: u8, extent : u16) fabin_dsd {
+fn get_up_in_dsd(comptime l: u8, comptime extent : u16) fabin_dsd {
     return @get_dsd(fabin_dsd, .{ 
         .fabric_color = colors_up[l], 
         .extent = extent, 
         .input_queue = iq[l] 
     });
 }
-fn get_down_out_dsd(comptime l: u8, extent : u16) fabout_dsd {
+fn get_down_out_dsd(comptime l: u8, comptime extent : u16) fabout_dsd {
     return @get_dsd(fabout_dsd, .{ 
         .fabric_color = colors_down[l], 
         .extent = extent, 
         .output_queue = oq[l] 
     });
 }
-fn get_down_in_dsd(comptime l: u8, extent : u16) fabin_dsd {
+fn get_down_in_dsd(comptime l: u8, comptime extent : u16) fabin_dsd {
     return @get_dsd(fabin_dsd, .{ 
         .fabric_color = colors_down[l], 
         .extent = extent, 
         .input_queue = iq[l] 
+    });
+}
+
+// Control wavelets DSD generators
+fn get_up_ctrl_out_dsd(comptime l: u8) fabout_dsd {
+    return @get_dsd(fabout_dsd, .{
+        .fabric_color = colors_up[l], 
+        .extent = 1,
+        .control = true,
+        .output_queue = oq[l]
     });
 }
 
@@ -206,6 +196,18 @@ const contrib_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{C_BUF_SIZE} -> c
 
 // Task ID for m2m pipeline management
 const m2m_pipeline_task_id: local_task_id = @get_local_task_id(8);
+
+
+// --- RUNTIME LAYOUT ---
+
+const ctrl = @import_module("<control>");
+const cw_advance = ctrl.encode_single_payload(
+    ctrl.opcode.SWITCH_ADV, true, @get_control_task_id(0), 0
+);
+
+var cw_buf = [1]u32{ cw_advance };
+
+const mem_cw_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> cw_buf[i] });
 
 
 //  --- COMMUNICATION PIPELINE MANAGEMENT FUNCTION ---
@@ -243,7 +245,7 @@ task m2m_pipeline_task() void {
         // m2m_translate(target_list[n_processed - 1], &parent_buf, &rx_buf_1);
 
         // Update global coefficients for the next upward jump 
-        for (@range(u16, 0, C_BUF_SIZE)) |i| {
+        for (@range(u16, C_BUF_SIZE)) |i| {
             g_coeff_buf[i] = parent_buf[i];
         }
 
@@ -272,6 +274,16 @@ task m2m_pipeline_task() void {
 
     @block(m2m_pipeline_task_id);
 
+    // Runtime switch by control wavelet
+    if (n_processed == 3) {
+        if (L == 0) { @fmovs(get_up_ctrl_out_dsd(0), mem_cw_dsd); }
+        else if (L == 1) { @fmovs(get_up_ctrl_out_dsd(1), mem_cw_dsd); }
+        else if (L == 2) { @fmovs(get_up_ctrl_out_dsd(2), mem_cw_dsd); }
+        else if (L == 3) { @fmovs(get_up_ctrl_out_dsd(3), mem_cw_dsd); }
+        else if (L == 4) { @fmovs(get_up_ctrl_out_dsd(4), mem_cw_dsd); }
+        else if (L == 5) { @fmovs(get_up_ctrl_out_dsd(5), mem_cw_dsd); }
+    }
+
     // Hardcoded block perchè compiler mi da fastidio
     if (L == 0) { pipeline_step(0); }
     else if (L == 1) { pipeline_step(1); }
@@ -279,19 +291,6 @@ task m2m_pipeline_task() void {
     else if (L == 3) { pipeline_step(3); }
     else if (L == 4) { pipeline_step(4); }
     else if (L == 5) { pipeline_step(5); }
-
-    // Dynamic switch over receive route
-    if (n_processed == 3) {
-
-        const is_vertical = (L % 2 != 0); 
-        if (is_vertical) {
-            // Era S -> R. Ora cambiamo in E -> R
-            // [INSERISCI QUI L'INVIO DEL CONTROL WAVELET PER RX_E_TX_R]
-        } else {
-            // Era E -> R. Ora cambiamo in S -> R
-            // [INSERISCI QUI L'INVIO DEL CONTROL WAVELET PER RX_S_TX_R]
-        }
-    }
 
     @unblock(m2m_pipeline_task_id);
 }
@@ -304,7 +303,7 @@ fn upward_level(comptime l: u8) void {
     const curr_level_id = get_level_id(morton_id, l);
 
     // Reset parent buffer for aggregation
-    for (@range(u16, 0, C_BUF_SIZE)) |i| {
+    for (@range(u16, C_BUF_SIZE)) |i| {
         parent_buf[i] = 0.0;
     }
 
@@ -321,7 +320,7 @@ fn upward_level(comptime l: u8) void {
     // Send first request token to child 010 
     tx_token_buf[0] = target_list[0];
     @fmovs(fab_out_token, mem_tx_token);
-    @fmovs(mem_rx_buf_1, fab_in_data, .{ .activate = m2m_pipeline_task_id });
+    @fmovs(mem_rx_buf_1, fab_in_data, .{ .async =true, .activate = m2m_pipeline_task_id });
 }
 
 // --- SEND TO PARENT FUNCTION ---
@@ -344,10 +343,6 @@ fn send_to_parent(comptime l: u8) void {
         // If token matches, send data
         if (rx_token_buf[0] == pe_level_id) {
             @fmovs(fab_out_data, g_coeff_dsd);
-
-            if (to_switch == l) {
-                // Change route
-            }
         }
     }
 }
@@ -385,7 +380,7 @@ fn upward_phase() void {
 fn compute_p2m() void {
     
     // Clean coefficients buffer
-    for (@range(u16, 0, C_BUF_SIZE)) |i| {
+    for (@range(u16, C_BUF_SIZE)) |i| {
         g_coeff_buf[i] = 0.0;
     }
 
@@ -426,8 +421,8 @@ fn m2m_translate(l: u8, parent: *[C_BUF_SIZE]f32, coeff: *[C_BUF_SIZE]f32) void 
 fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32) void {
 
     // Clean contribution buffer
-    for (@range(u16, 0, C_BUF_SIZE)) |i| {
-        buf[i] = 0.0;
+    for (@range(u16, C_BUF_SIZE)) |i| {
+        buf.*[i] = 0.0;
     }
 
     var r2 : f32 = dx * dx + dy * dy + dz * dz;
@@ -440,7 +435,7 @@ fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32) voi
     var i_m : u16 = 0;
 
     // External cicle over m
-    for (@range(i16, 0, P + 1)) |m| {
+    for (@range(i16, P + 1)) |m| {
 
         // Calculate diagonal value {m,m}
         if (m > 0) {
@@ -452,9 +447,9 @@ fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32) voi
         }
 
         // Accumulate diagonal values in coefficients buffer
-        buf[i_m] += mm_r;
+        buf.*[i_m] += mm_r;
         i_m += 1; 
-        buf[i_m] += mm_c;
+        buf.*[i_m] += mm_c;
         i_m += 1; 
 
         // Initialize variables for previous values
@@ -464,7 +459,7 @@ fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32) voi
         var prev1_c : f32 = mm_c;
 
         // Inner cicle over l
-        for (@range(i16, m + 1, P + 1)) |l| {
+        for (@range(i16, m + 1, P + 1, 1)) |l| {
 
             var k_lm : f32 = 1.0 / @as(f32, l * l - m * m);
             var z_k : f32 = (2.0 * @as(f32, l) - 1.0) * dz;
@@ -472,10 +467,10 @@ fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32) voi
             var current_r : f32 = k_lm * (z_k * prev1_r - r2 * prev2_r);
             var current_c : f32 = k_lm * (z_k * prev1_c - r2 * prev2_c);
 
-            buf[i_m] += current_r;
+            buf.*[i_m] += current_r;
             i_m += 1; 
 
-            buf[i_m] += current_c;
+            buf.*[i_m] += current_c;
             i_m += 1; 
 
             prev2_r = prev1_r;
@@ -513,7 +508,10 @@ comptime {
     // Local tasks binding
     @bind_local_task(m2m_pipeline_task, m2m_pipeline_task_id);
 
+}
+
+layout {
     // Export symbols to host
-    @export_symbol(bodies_symbol, "bodies");
-    @export_symbol(upward_phase);
+    @export_name("upward_phase", fn()void);
+    @export_name("bodies", [*]u32);
 }
