@@ -1,0 +1,374 @@
+\documentclass[10pt,dvipsnames,table]{article}
+
+% ── Geometry & Encoding ──
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+% ── Typeface: Palatino + Helvetica condensed for headings ──
+\usepackage[sc,osf]{mathpazo}
+\usepackage[scaled=0.88]{helvet}
+\usepackage{courier}
+\linespread{1.08}
+
+% ── Page geometry ──
+\usepackage[
+  top=35mm, bottom=35mm,
+  left=35mm, right=35mm
+]{geometry}
+
+% ── Maths ──
+\usepackage{amsmath, amssymb}
+
+% ── Graphics ──
+\usepackage{tikz}
+\usetikzlibrary{patterns, arrows.meta, positioning, calc, decorations.pathreplacing, fit}
+\usepackage{graphicx}
+
+% ── Tables ──
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{colortbl}
+
+% ── Formatting ──
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{titling}
+\usepackage{needspace}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{dblfloatfix}
+\usepackage{microtype}
+\usepackage{etoolbox}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins, breakable}
+
+% ══════════════════════════════════════════════════════════════════
+% COLOR PALETTE
+% ══════════════════════════════════════════════════════════════════
+
+% ── Ink tones (text, titles, rules) ──
+\definecolor{Ink}{HTML}{1A1A2E}
+\definecolor{DarkInk}{HTML}{16213E}
+\definecolor{MidInk}{HTML}{3D4F6F}
+\definecolor{LightInk}{HTML}{6B7B99}
+\definecolor{PaleInk}{HTML}{9AA5B8}
+\definecolor{Mist}{HTML}{E8ECF1}
+\definecolor{Snow}{HTML}{F5F7FA}
+
+% ── Accents (charts, links, highlights) ──
+\definecolor{DeepBlue}{HTML}{1B3A6B}
+\definecolor{BrightBlue}{HTML}{2E6EC7}
+\definecolor{Teal}{HTML}{0E8C7F}  
+\definecolor{Coral}{HTML}{C7523B}  
+\definecolor{Violet}{HTML}{6C4BA3}  
+\definecolor{Gold}{HTML}{C4962C}     
+
+% ── Table helpers ──
+\definecolor{TableHead}{HTML}{1B3A6B} 
+\definecolor{TableRowAlt}{HTML}{F2F5F9}
+
+% ══════════════════════════════════════════════════════════════════
+% HYPERLINKS
+% ══════════════════════════════════════════════════════════════════
+\usepackage[
+  colorlinks=true,
+  linkcolor=DeepBlue,
+  urlcolor=BrightBlue,
+  citecolor=DeepBlue
+]{hyperref}
+
+% ══════════════════════════════════════════════════════════════════
+% SECTION STYLING
+% ══════════════════════════════════════════════════════════════════
+
+\titleformat{\section}
+  {\needspace{5\baselineskip}\normalsize\sffamily\bfseries\color{DarkInk}}
+  {\thesection}
+  {0.6em}
+  {\MakeUppercase}
+\titlespacing*{\section}{0pt}{1.8em}{0.5em}
+
+\newcommand{\sectionrule}{\vspace{0.2em}\noindent\textcolor{PaleInk}{\rule{\columnwidth}{0.4pt}}\vspace{0.3em}}
+
+\let\oldsection\section
+\renewcommand{\section}[1]{\oldsection{#1}\sectionrule}
+
+\titleformat{\subsection}
+  {\needspace{3\baselineskip}\small\sffamily\bfseries\color{DarkInk}}
+  {\thesubsection}
+  {0.5em}
+  {}
+\titlespacing*{\subsection}{0pt}{1.2em}{0.3em}
+
+\titleformat{\subsubsection}
+  {\small\sffamily\bfseries\itshape\color{MidInk}}
+  {\thesubsubsection}
+  {0.5em}
+  {}
+\titlespacing*{\subsubsection}{0pt}{0.9em}{0.2em}
+
+% ══════════════════════════════════════════════════════════════════
+% LISTS
+% ══════════════════════════════════════════════════════════════════
+\setlist{leftmargin=1.5em, itemsep=0.15em, topsep=0.3em, parsep=0.1em}
+\setlist[itemize,1]{label={\color{MidInk}\footnotesize$\blacktriangleright$}}
+\setlist[itemize,2]{label={\color{LightInk}\textendash}}
+\setlist[enumerate,1]{label={\color{MidInk}\arabic*.}}
+
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0pt}
+\color{Ink}
+
+% ══════════════════════════════════════════════════════════════════
+% CAPTIONS
+% ══════════════════════════════════════════════════════════════════
+\captionsetup{
+  font={small},
+  labelfont={bf, color=DarkInk, sf},
+  textfont={color=MidInk},
+  skip=6pt,
+  format=hang,
+  labelsep=quad
+}
+\captionsetup[table]{position=above, skip=4pt}
+\captionsetup[figure]{position=below}
+
+% ══════════════════════════════════════════════════════════════════
+% HEADER / FOOTER
+% ══════════════════════════════════════════════════════════════════
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\sffamily\color{LightInk}Fast Multipole Method\enspace\textcolor{PaleInk}{|}\enspace Cerebras WSE-3}
+\fancyhead[R]{\footnotesize\sffamily\color{LightInk}\thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+\fancypagestyle{plain}{%
+  \fancyhf{}%
+  \fancyfoot[C]{\footnotesize\sffamily\color{LightInk}\thepage}%
+  \renewcommand{\headrulewidth}{0pt}%
+}
+
+% ══════════════════════════════════════════════════════════════════
+% TITLE BLOCK
+% ══════════════════════════════════════════════════════════════════
+\pretitle{\begin{center}\LARGE\sffamily\bfseries\color{DarkInk}}
+\posttitle{\end{center}\vspace{0.1em}}
+\preauthor{\begin{center}\normalsize\color{MidInk}}
+\postauthor{\end{center}}
+\predate{\begin{center}\small\color{LightInk}}
+\postdate{\end{center}\vspace{-1em}}
+\setlength{\droptitle}{-2.5em}
+
+% ══════════════════════════════════════════════════════════════════
+% CODE LISTINGS
+% ══════════════════════════════════════════════════════════════════
+\lstdefinestyle{cstyle}{
+  backgroundcolor=\color{Snow},
+  basicstyle=\ttfamily\scriptsize\color{Ink},
+  keywordstyle=\color{DeepBlue}\bfseries,
+  commentstyle=\color{LightInk}\itshape,
+  stringstyle=\color{Teal},
+  identifierstyle=\color{Ink},
+  breaklines=true,
+  frame=l,
+  framerule=2pt,
+  rulecolor=\color{Mist},
+  numbers=left,
+  numberstyle=\tiny\sffamily\color{PaleInk},
+  numbersep=6pt,
+  tabsize=4,
+  xleftmargin=12pt,
+  framexleftmargin=12pt,
+  aboveskip=0.8em,
+  belowskip=0.6em,
+}
+\lstset{style=cstyle}
+
+\let\oldtexttt\texttt
+\renewcommand{\texttt}[1]{%
+  {\small\colorbox{Mist}{\oldtexttt{\textcolor{DarkInk}{#1}}}}%
+}
+
+% ══════════════════════════════════════════════════════════════════
+% TABLE STYLING
+% ══════════════════════════════════════════════════════════════════
+\arrayrulecolor{Mist}
+\setlength{\heavyrulewidth}{0.08em}
+\setlength{\lightrulewidth}{0.04em}
+
+% ══════════════════════════════════════════════════════════════════
+% DOCUMENT
+% ══════════════════════════════════════════════════════════════════
+\title{Fast Multipole Method\\[0.2em]
+{\large\color{MidInk} Cerebras WSE-3 implementation}}
+\author{Jacopo Mazzatorta}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{plain}
+
+% ══════════════════════════════════════════════════════════════════
+\section{Notes}
+
+The WSE-3 FMM implementation is based on the same mathematics as the classic ExaFMM: multipolar expansions in spherical solid harmonics for the 3D Laplace kernel. Every applied optimization is backed by a properly cited algebraic proof. 
+In fact, these two implementations are mathematically equivalent. They produce the same multipolar coefficients and translations, even when operating with the restricted set of operations available on Cerebras Wafer-Scale devices.
+
+Both implementations evaluate the gravitational or electrostatic potential through multipolar manipulations. The core of the algorithm breaks down into different phases based on the stages of multipolar construction and deconstruction. 
+After an initial phase of domain decomposition, where the topology of the communication tree is defined, the \texttt{particle to multipole (P2M)} phase aggregates clusters of close particles into multipoles that retain and reflect the same physical properties. 
+In the next phase, known as \texttt{multipole to multipole (M2M)}, these resulting multipoles are aggregated into even larger multipoles as they ascend the tree.
+To be continued...
+
+\subsubsection{Data Structure}
+Due to hardware simplicity-driven choices, Cerebras architectures do not support advanced data types or complex operations natively. 
+In the ExaFMM version, complex numbers and related operations are frequent. 
+Therefore, to allow the implementation to work on the WSE-3, complex components are treated as real numbers and stored in an interleaved buffer. 
+This solution allows complex operations to be performed as weighted $2 \times 2$ matrix multiplications. This is exactly what most programming languages, such as C++, do behind the scenes when handling these types of operations.
+
+\subsubsection{Buffer Dimensions}
+In both implementations, to express solid harmonics up to degree $P=8$, instead of allocating full buffers of $(P+1)^2$ elements (where the order $m$ ranges from $-l$ to $l$), the mathematical symmetry of the coefficients is exploited. 
+This allows the use of smaller buffers of size $\frac{(P+1)(P+2)}{2}$, storing only the positive orders.
+When negative-order values are needed, they are simply calculated by taking the complex conjugate.
+The same logic applies to the M2L translation buffer, which must require up to the sum of the maximum degrees of the source and target expansions $(2P)^2$. While a full representation would require $(2P+1)^2$ coefficients, the effectively allocated memory is reduced to $\frac{(P+1)(P+2)}{2}$ elements by storing only the positive-order values.
+
+\subsubsection{Convolution and evaluation loop inversion}
+To be continued...
+
+\subsubsection{Sign differences in translation vector}
+To be continued...
+
+% ══════════════════════════════════════════════════════════════════
+\subsection{P2M}
+
+The ExaFMM implementation performs this phase by first converting Cartesian coordinates into spherical coordinates $(r, \theta, \phi)$ via the \texttt{cart2sph} function, and subsequently computing the spherical harmonics using \texttt{evalMultipole}. 
+However, this latter function relies on operations that are not natively supported by the WSE-3 architecture. 
+Specifically, it computes the sine and cosine of the polar angle to evaluate the associated Legendre polynomials and uses the complex exponential of the azimuthal angle to determine the rotational phase of the solid harmonics.
+To translate these calculations to the Cerebras chip, the WSE-3 version adopts the real formulation of solid spherical harmonics proposed by Pérez-Jordá and Yang. 
+By using their Cartesian recurrence relations, the need for unsupported trigonometric and exponential functions has been successfully bypassed.
+
+\vspace{0.8em}
+\noindent\textbf{Test results}\\[0.2em]
+Furthermore, the tests showed a perfect match between the results of the isolated operations and the reference implementation.
+
+\begin{table}[H]
+\centering
+\caption{P2M comparison results ($P=8$)}\label{tbl:p2m_results}
+\small
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{@{}ccc@{}}
+\rowcolor{TableHead}
+\textcolor{white}{\textbf{$(l, m)$}} &
+\textcolor{white}{\textbf{ExaFMM}} &
+\textcolor{white}{\textbf{WSE-3}} \\
+\midrule
+$(0, 0)$ & $+1.500000 + 0.000000i$ & $+1.500000 + 0.000000i$ \\ \rowcolor{TableRowAlt}
+$(1, 0)$ & $-1.200000 + 0.000000i$ & $-1.200000 - 0.000000i$ \\
+$(1, 1)$ & $+0.375000 + 0.150000i$ & $+0.375000 - 0.150000i$ \\ \rowcolor{TableRowAlt}
+$(2, 0)$ & $+0.371250 + 0.000000i$ & $+0.371250 + 0.000000i$ \\
+$(2, 1)$ & $-0.300000 - 0.120000i$ & $-0.300000 + 0.120000i$ \\ \rowcolor{TableRowAlt}
+$(2, 2)$ & $+0.039375 + 0.037500i$ & $+0.039375 - 0.037500i$ \\
+$(3, 0)$ & $-0.041000 + 0.000000i$ & $-0.041000 - 0.000000i$ \\ \rowcolor{TableRowAlt}
+$(3, 1)$ & $+0.106406 + 0.042563i$ & $+0.106406 - 0.042563i$ \\
+$(3, 2)$ & $-0.031500 - 0.030000i$ & $-0.031500 + 0.030000i$ \\ \rowcolor{TableRowAlt}
+$(3, 3)$ & $+0.002031 + 0.004437i$ & $+0.002031 - 0.004438i$ \\
+$(4, 0)$ & $-0.007229 + 0.000000i$ & $-0.007229 + 0.000000i$ \\ \rowcolor{TableRowAlt}
+$(4, 1)$ & $-0.021125 - 0.008450i$ & $-0.021125 + 0.008450i$ \\
+$(4, 2)$ & $+0.011648 + 0.011094i$ & $+0.011648 - 0.011094i$ \\ \rowcolor{TableRowAlt}
+$(4, 3)$ & $-0.001625 - 0.003550i$ & $-0.001625 + 0.003550i$ \\
+$(4, 4)$ & $+0.000016 + 0.000328i$ & $+0.000016 - 0.000328i$ \\ \rowcolor{TableRowAlt}
+$(5, 0)$ & $+0.003607 + 0.000000i$ & $+0.003607 - 0.000000i$ \\
+$(5, 1)$ & $+0.002214 + 0.000886i$ & $+0.002214 - 0.000886i$ \\ \rowcolor{TableRowAlt}
+$(5, 2)$ & $-0.002599 - 0.002475i$ & $-0.002599 + 0.002475i$ \\
+$(5, 3)$ & $+0.000613 + 0.001340i$ & $+0.000613 - 0.001340i$ \\ \rowcolor{TableRowAlt}
+$(5, 4)$ & $-0.000013 - 0.000262i$ & $-0.000013 + 0.000262i$ \\
+$(5, 5)$ & $-0.000006 + 0.000017i$ & $-0.000006 - 0.000017i$ \\ \rowcolor{TableRowAlt}
+$(6, 0)$ & $-0.000695 + 0.000000i$ & $-0.000695 + 0.000000i$ \\
+$(6, 1)$ & $+0.000005 + 0.000002i$ & $+0.000005 - 0.000002i$ \\ \rowcolor{TableRowAlt}
+$(6, 2)$ & $+0.000376 + 0.000358i$ & $+0.000376 - 0.000358i$ \\
+$(6, 3)$ & $-0.000144 - 0.000314i$ & $-0.000144 + 0.000314i$ \\ \rowcolor{TableRowAlt}
+$(6, 4)$ & $+0.000005 + 0.000100i$ & $+0.000005 - 0.000100i$ \\
+$(6, 5)$ & $+0.000005 - 0.000013i$ & $+0.000005 + 0.000013i$ \\ \rowcolor{TableRowAlt}
+$(6, 6)$ & $-0.000001 + 0.000001i$ & $-0.000001 - 0.000001i$ \\
+$(7, 0)$ & $+0.000079 + 0.000000i$ & $+0.000079 - 0.000000i$ \\ \rowcolor{TableRowAlt}
+$(7, 1)$ & $-0.000044 - 0.000018i$ & $-0.000044 + 0.000018i$ \\
+$(7, 2)$ & $-0.000033 - 0.000032i$ & $-0.000033 + 0.000032i$ \\ \rowcolor{TableRowAlt}
+$(7, 3)$ & $+0.000023 + 0.000051i$ & $+0.000023 - 0.000051i$ \\
+$(7, 4)$ & $-0.000001 - 0.000024i$ & $-0.000001 + 0.000024i$ \\ \rowcolor{TableRowAlt}
+$(7, 5)$ & $-0.000002 + 0.000005i$ & $-0.000002 - 0.000005i$ \\
+$(7, 6)$ & $+0.000000 - 0.000000i$ & $+0.000000 + 0.000000i$ \\ \rowcolor{TableRowAlt}
+$(7, 7)$ & $-0.000000 + 0.000000i$ & $-0.000000 - 0.000000i$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ══════════════════════════════════════════════════════════════════
+\subsection{M2M}
+
+\vspace{0.4em}
+\noindent\textbf{Precomputations}\\[0.2em]
+Precomputations and tables gen to be explained...
+
+\vspace{0.8em}
+\noindent\textbf{Test results}\\[0.2em]
+Differences in crossed orders caused by algebric base change. Discussed in Pérez-Jordá and Yang paper. 
+After M2L results are equivalent.
+To be explained...
+
+\begin{table}[H]
+\centering
+\caption{M2M translation comparison results ($P=8$)}\label{tbl:m2m_results}
+\small
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{@{}ccc@{}}
+\rowcolor{TableHead}
+\textcolor{white}{\textbf{$(l, m)$}} &
+\textcolor{white}{\textbf{ExaFMM}} &
+\textcolor{white}{\textbf{WSE-3}} \\
+\midrule
+$(0, 0)$ & $+1.100000 + 0.500000i$ & $+1.100000 - 0.500000i$ \\ \rowcolor{TableRowAlt}
+$(1, 0)$ & $-3.080000 - 0.900000i$ & $-3.080000 + 0.900000i$ \\
+$(1, 1)$ & $-1.975000 + 1.235000i$ & $-1.875000 + 0.985000i$ \\ \rowcolor{TableRowAlt}
+$(2, 0)$ & $+6.232250 + 1.023750i$ & $+6.232250 - 1.023750i$ \\
+$(2, 1)$ & $+4.380000 - 2.333000i$ & $+4.200000 - 1.883000i$ \\ \rowcolor{TableRowAlt}
+$(2, 2)$ & $+2.666375 - 1.429375i$ & $+2.691375 - 1.455625i$ \\
+$(3, 0)$ & $-9.784567 - 1.037417i$ & $-9.784567 + 1.037417i$ \\ \rowcolor{TableRowAlt}
+$(3, 1)$ & $-6.987906 + 3.631431i$ & $-6.779531 + 3.110494i$ \\
+$(3, 2)$ & $-5.653350 + 2.655375i$ & $-5.698350 + 2.702625i$ \\ \rowcolor{TableRowAlt}
+$(3, 3)$ & $-3.507740 + 1.930181i$ & $-3.504781 + 1.928827i$ \\
+$(4, 0)$ & $+13.405207 + 1.035007i$ & $+13.405207 - 1.035007i$ \\ \rowcolor{TableRowAlt}
+$(4, 1)$ & $+9.474508 - 4.667715i$ & $+9.260500 - 4.132695i$ \\
+$(4, 2)$ & $+8.727503 - 4.086732i$ & $+8.779898 - 4.141747i$ \\ \rowcolor{TableRowAlt}
+$(4, 3)$ & $+7.166317 - 3.560080i$ & $+7.160992 - 3.557643i$ \\
+$(4, 4)$ & $+4.318090 - 2.401783i$ & $+4.318309 - 2.401794i$ \\ \rowcolor{TableRowAlt}
+$(5, 0)$ & $-17.012690 - 1.033805i$ & $-17.012690 + 1.033805i$ \\
+$(5, 1)$ & $-11.846708 + 5.545567i$ & $-11.632109 + 5.009070i$ \\ \rowcolor{TableRowAlt}
+$(5, 2)$ & $-11.518409 + 5.147393i$ & $-11.572455 + 5.204142i$ \\
+$(5, 3)$ & $-10.662626 + 5.364843i$ & $-10.656408 + 5.361996i$ \\ \rowcolor{TableRowAlt}
+$(5, 4)$ & $-8.624959 + 4.408723i$ & $-8.625353 + 4.408743i$ \\
+$(5, 5)$ & $-5.131846 + 2.874771i$ & $-5.131835 + 2.874775i$ \\ \rowcolor{TableRowAlt}
+$(6, 0)$ & $+20.602009 + 1.033573i$ & $+20.602009 - 1.033573i$ \\
+$(6, 1)$ & $+14.156427 - 6.281333i$ & $+13.941829 - 5.744839i$ \\ \rowcolor{TableRowAlt}
+$(6, 2)$ & $+14.089685 - 5.974439i$ & $+14.143970 - 6.031438i$ \\
+$(6, 3)$ & $+13.645178 - 6.644406i$ & $+13.638751 - 6.641464i$ \\ \rowcolor{TableRowAlt}
+$(6, 4)$ & $+12.536527 - 6.563075i$ & $+12.536988 - 6.563097i$ \\
+$(6, 5)$ & $+10.089724 - 5.260114i$ & $+10.089704 - 5.260121i$ \\ \rowcolor{TableRowAlt}
+$(6, 6)$ & $+5.945360 - 3.347756i$ & $+5.945360 - 3.347755i$ \\
+$(7, 0)$ & $-24.186659 - 1.033547i$ & $-24.186659 + 1.033547i$ \\ \rowcolor{TableRowAlt}
+$(7, 1)$ & $-16.438537 + 6.944328i$ & $-16.223951 + 6.407864i$ \\
+$(7, 2)$ & $-16.552355 + 6.611082i$ & $-16.606660 + 6.668103i$ \\ \rowcolor{TableRowAlt}
+$(7, 3)$ & $-16.284524 + 7.593072i$ & $-16.278062 + 7.590114i$ \\
+$(7, 4)$ & $-15.713002 + 8.041410i$ & $-15.713478 + 8.041434i$ \\ \rowcolor{TableRowAlt}
+$(7, 5)$ & $-14.417803 + 7.765462i$ & $-14.417779 + 7.765470i$ \\
+$(7, 6)$ & $-11.554049 + 6.111485i$ & $-11.554050 + 6.111485i$ \\ \rowcolor{TableRowAlt}
+$(7, 7)$ & $-6.758886 + 3.820736i$ & $-6.758886 + 3.820736i$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

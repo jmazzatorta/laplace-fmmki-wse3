@@ -123,6 +123,8 @@ var rx_token_buf = @zeros([1]u32);
 // Temporary buffer for m2m phase
 var parent_buf = @zeros([C_BUF_SIZE]f32);
 
+// Translation vector solid harmonic coefficients
+var v_buf = @zeros([C_BUF_SIZE]f32);
 
 // --- GLOBAL VARIABLES ---
 
@@ -210,6 +212,11 @@ var cw_buf = [1]u32{ cw_advance };
 const mem_cw_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> cw_buf[i] });
 
 
+// --- KERNELS MODULE ---
+
+const kernels = @import_module("kernels.csl", .{ .P = P });
+
+
 //  --- COMMUNICATION PIPELINE MANAGEMENT FUNCTION ---
 
 fn pipeline_step(comptime l: u8) void {
@@ -221,12 +228,19 @@ fn pipeline_step(comptime l: u8) void {
     tx_token_buf[0] = target_list[target_idx];
     @fmovs(fab_out_token, mem_tx_token);
 
+    // Get current target (whose data just arrived)
+    const current_target = target_list[target_idx - 1]; 
+
+    // Calculate translation vector and its solid harmonic
+    const t_vec = get_translation_vector(current_target, L);
+    kernels.compute_solid_harmonics(t_vec[0], t_vec[1], t_vec[2], &v_buf);
+
     if (use_first) {
         @fmovs(mem_rx_buf_1, fab_in_data, .{ .async=true, .activate = m2m_pipeline_task_id });
-        // m2m_translate(current_target, &parent_buf, &rx_buf_2);
+        kernels.m2m_translate(&v_buf, &rx_buf_2, &parent_buf);
     } else {
         @fmovs(mem_rx_buf_2, fab_in_data, .{ .async=true, .activate = m2m_pipeline_task_id });
-        // m2m_translate(current_target, &parent_buf, &rx_buf_1);
+        kernels.m2m_translate(&v_buf, &rx_buf_1, &parent_buf);
     }
 
     n_processed += 1;
@@ -241,8 +255,17 @@ task m2m_pipeline_task() void {
 
     if (n_processed == 7) {
 
-        //TODO
-        // m2m_translate(target_list[n_processed - 1], &parent_buf, &rx_buf_1);
+        // Calculate translation vector and its solid harmonic
+        const last_target = target_list[n_processed - 1];
+        const t_vec = get_translation_vector(last_target, L);
+        kernels.compute_solid_harmonics(t_vec[0], t_vec[1], t_vec[2], &v_buf);
+
+        // Translate last remaining child harmonic
+        if (use_first) {
+            kernels.m2m_translate(&v_buf, &rx_buf_1, &parent_buf);
+        } else {
+            kernels.m2m_translate(&v_buf, &rx_buf_2, &parent_buf);
+        }
 
         // Update global coefficients for the next upward jump 
         for (@range(u16, C_BUF_SIZE)) |i| {
@@ -307,8 +330,13 @@ fn upward_level(comptime l: u8) void {
         parent_buf[i] = 0.0;
     }
 
-    // Process local child coefficients
-    m2m_local(curr_level_id, &parent_buf, &g_coeff_buf);
+    // Calculate translation vector and its solid harmonic
+    const t_vec = get_translation_vector(curr_level_id, l);
+    kernels.compute_solid_harmonics(t_vec[0], t_vec[1], t_vec[2], &v_buf);
+
+    // M2M local translation
+    kernels.m2m_translate(&v_buf, &g_coeff_buf, &parent_buf);
+
 
     const fab_out_token = get_down_out_dsd(l, 1);
     const fab_in_data = get_up_in_dsd(l, C_BUF_SIZE);
@@ -399,90 +427,12 @@ fn compute_p2m() void {
         var q  : f32 = @bitcast(f32, bodies[i_b + 3]);
 
         // Compute contribution of body b to spheric harmonic
-        compute_solid_harmonics(dx, dy, dz, &contrib_buf);
+        kernels.compute_solid_harmonics(dx, dy, dz, &contrib_buf);
 
         // Apply charge q to contribution_buff and apply to spherical harmonic
         @fmacs(g_coeff_dsd, g_coeff_dsd, contrib_dsd, q);
         
     }
-}
-
-fn m2m_local(l: u8, parent: *[C_BUF_SIZE]f32, coeff: *[C_BUF_SIZE]f32) void {
-
-}
-
-fn m2m_translate(l: u8, parent: *[C_BUF_SIZE]f32, coeff: *[C_BUF_SIZE]f32) void {
-
-}
-
-
-// --- PRE-COMPUTATIONS ---
-
-fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32) void {
-
-    // Clean contribution buffer
-    for (@range(u16, C_BUF_SIZE)) |i| {
-        buf.*[i] = 0.0;
-    }
-
-    var r2 : f32 = dx * dx + dy * dy + dz * dz;
-
-    // Initialize variables for the diagonal {m,m} starting from {0,0}
-    var mm_r : f32 = 1.0;
-    var mm_c : f32 = 0.0;
-
-    // Initialize counter for linearized buffer
-    var i_m : u16 = 0;
-
-    // External cicle over m
-    for (@range(i16, P + 1)) |m| {
-
-        // Calculate diagonal value {m,m}
-        if (m > 0) {
-            var k_diag : f32 = -1.0 / (2.0 * @as(f32, m));
-            var temp_r : f32 = k_diag * (dx * mm_r - dy * mm_c);
-            var temp_c : f32 = k_diag * (dy * mm_r + dx * mm_c);
-            mm_r = temp_r;
-            mm_c = temp_c;
-        }
-
-        // Accumulate diagonal values in coefficients buffer
-        buf.*[i_m] += mm_r;
-        i_m += 1; 
-        buf.*[i_m] += mm_c;
-        i_m += 1; 
-
-        // Initialize variables for previous values
-        var prev2_r : f32 = 0.0;
-        var prev2_c : f32 = 0.0;
-        var prev1_r : f32 = mm_r;
-        var prev1_c : f32 = mm_c;
-
-        // Inner cicle over l
-        for (@range(i16, m + 1, P + 1, 1)) |l| {
-
-            var k_lm : f32 = 1.0 / @as(f32, l * l - m * m);
-            var z_k : f32 = (2.0 * @as(f32, l) - 1.0) * dz;
-
-            var current_r : f32 = k_lm * (z_k * prev1_r - r2 * prev2_r);
-            var current_c : f32 = k_lm * (z_k * prev1_c - r2 * prev2_c);
-
-            buf.*[i_m] += current_r;
-            i_m += 1; 
-
-            buf.*[i_m] += current_c;
-            i_m += 1; 
-
-            prev2_r = prev1_r;
-            prev2_c = prev1_c;
-            prev1_r = current_r;
-            prev1_c = current_c;
-        }
-    }
-}
-
-fn precomp_mat_m2m() void {
-
 }
 
 

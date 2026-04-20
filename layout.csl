@@ -23,7 +23,7 @@ const grid_side : u16 = @as(u16, 1) << ((MORTON_BITS + 1) / 2);
 
 // Multipole constants
 const P : u16 = 8;
-const N_COEFFS : u16 = (P + 1) * (P + 1); 
+const N_COEFFS : u16 = (P + 1) * (P + 2) / 2;
 
 // Colors - Upward 
 const color_U1 = @get_color(3);

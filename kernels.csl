@@ -1,0 +1,170 @@
+// kernels.csl
+
+param P: u16; // 8
+
+pub const N_COEFFS: u16 = (P + 1) * (P + 2) / 2;      // 45
+pub const C_BUF_SIZE: u16 = N_COEFFS * 2;             // 90
+
+pub const N_COEFFS_M2L: u16 = (2*P+1) * (2*P+2) / 2;  // 180
+pub const C_BUF_M2L_SIZE: u16 = N_COEFFS_M2L * 2;     // 360
+
+// Import precomputed sparse tables
+
+const m2m_tables = @import_module("m2m_tables.csl");
+const m2l_tables = @import_module("m2l_tables.csl");
+
+
+// --- Solid Harmonics Computation ---
+
+pub fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32) void {
+
+    // Clean buffer
+    for (@range(u16, C_BUF_SIZE)) |i| {
+        buf.*[i] = 0.0;
+    }
+
+    var r2: f32 = dx * dx + dy * dy + dz * dz;
+
+    // Diagonal {m,m} starting from {0,0}
+    var mm_r: f32 = 1.0;
+    var mm_c: f32 = 0.0;
+
+    // Initialize counter for linearized buffer
+    var i_m: u16 = 0;
+
+    // Outer loop over m
+    for (@range(i16, P + 1)) |m| {
+
+        // Diagonal recurrence
+        if (m > 0) {
+            var k_diag: f32 = -1.0 / (2.0 * @as(f32, m));
+            var temp_r: f32 = k_diag * (dx * mm_r - dy * mm_c);
+            var temp_c: f32 = k_diag * (dy * mm_r + dx * mm_c);
+            mm_r = temp_r;
+            mm_c = temp_c;
+        }
+
+        // Store diagonal value
+        buf.*[i_m] = mm_r;
+        buf.*[i_m + 1] = mm_c;
+        i_m += 2;
+
+        // Vertical recurrence
+        var prev2_r: f32 = 0.0;
+        var prev2_c: f32 = 0.0;
+        var prev1_r: f32 = mm_r;
+        var prev1_c: f32 = mm_c;
+
+        for (@range(i16, m + 1, P + 1, 1)) |l| {
+
+            var k_lm: f32 = 1.0 / @as(f32, l * l - m * m);
+            var z_k: f32 = (2.0 * @as(f32, l) - 1.0) * dz;
+
+            var current_r: f32 = k_lm * (z_k * prev1_r - r2 * prev2_r);
+            var current_c: f32 = k_lm * (z_k * prev1_c - r2 * prev2_c);
+
+            buf.*[i_m] = current_r;
+            buf.*[i_m + 1] = current_c;
+            i_m += 2;
+
+            prev2_r = prev1_r;
+            prev2_c = prev1_c;
+            prev1_r = current_r;
+            prev1_c = current_c;
+        }
+    }
+}
+
+
+// --- M2M Translation ---
+
+pub fn m2m_translate( 
+    v_buf: *[C_BUF_SIZE]f32, 
+    child_buf: *[C_BUF_SIZE]f32, 
+    parent_buf: *[C_BUF_SIZE]f32) 
+    void {
+
+    // Loop over each father coefficient
+    for (@range(u16, N_COEFFS)) |f_idx| {
+
+        var accum_r: f32 = 0.0;
+        var accum_i: f32 = 0.0;
+
+        const start_idx: u16 = m2m_tables.offsets[f_idx];
+        const end_idx: u16 = m2m_tables.offsets[f_idx + 1];
+
+        // Loop over sparse entries for this father coefficient
+        for (@range(u16, start_idx, end_idx, 1)) |i| {
+
+            // Read child coefficient (interleaved real, imag)
+            const ci: u16 = m2m_tables.child_indices[i];
+            const c_r: f32 = child_buf.*[ci];
+            const c_i: f32 = child_buf.*[ci + 1];
+
+            // Read translation harmonic V (interleaved real, imag)
+            const vi: u16 = m2m_tables.v_indices[i];
+            const v_r: f32 = v_buf.*[vi];
+            const v_i: f32 = v_buf.*[vi + 1];
+
+            // Complex multiplication with precomputed signs:
+            // father_r += s_rr * V_r * c_r + s_ri * V_i * c_i
+            // father_i += s_ir * V_r * c_i + s_ii * V_i * c_r
+            accum_r += m2m_tables.sign_rr[i] * v_r * c_r +
+                       m2m_tables.sign_ri[i] * v_i * c_i;
+            accum_i += m2m_tables.sign_ir[i] * v_r * c_i +
+                       m2m_tables.sign_ii[i] * v_i * c_r;
+        }
+
+        // Accumulate into parent buffer
+        const p_idx: u16 = f_idx * 2;
+        parent_buf.*[p_idx] += accum_r;
+        parent_buf.*[p_idx + 1] += accum_i;
+    }
+}
+
+
+// --- M2L Translation ---
+
+pub fn m2l_translate( 
+    v_buf: *[C_BUF_M2L_SIZE]f32, 
+    source_buf: *[C_BUF_SIZE]f32, 
+    target_buf: *[C_BUF_SIZE]f32) 
+    void {
+
+    // Loop over each target coefficient
+    for (@range(u16, N_COEFFS)) |t_idx| {
+
+        var accum_r: f32 = 0.0;
+        var accum_i: f32 = 0.0;
+
+        const start_idx: u16 = m2l_tables.offsets[t_idx];
+        const end_idx: u16 = m2l_tables.offsets[t_idx + 1];
+
+        // Loop over sparse entries for this target coefficient
+        for (@range(u16, start_idx, end_idx, 1)) |i| {
+
+            // Read source coefficient (interleaved real, imag)
+            const si: u16 = m2l_tables.source_indices[i];
+            const c_r: f32 = source_buf.*[si];
+            const c_i: f32 = source_buf.*[si + 1];
+
+            // Read translation harmonic V (interleaved real, imag)
+            const vi: u16 = m2l_tables.v_indices[i];
+            const v_r: f32 = v_buf.*[vi];
+            const v_i: f32 = v_buf.*[vi + 1];
+
+            // Complex multiplication with precomputed signs:
+            // target_r += s_rr * V_r * c_r + s_ri * V_i * c_i
+            // target_i += s_ir * V_r * c_i + s_ii * V_i * c_r
+            accum_r += m2l_tables.sign_rr[i] * v_r * c_r +
+                       m2l_tables.sign_ri[i] * v_i * c_i;
+            accum_i += m2l_tables.sign_ir[i] * v_r * c_i +
+                       m2l_tables.sign_ii[i] * v_i * c_r;
+        }
+
+        // Accumulate into target buffer
+        const t_mem_idx: u16 = t_idx * 2;
+        target_buf.*[t_mem_idx] += accum_r;
+        target_buf.*[t_mem_idx + 1] += accum_i;
+    }
+}

@@ -47,7 +47,7 @@ prob_range = float(compile_data['params']['prob_range'])
 # Max bodies per PE
 max_bodies_pe = int(compile_data['params']['max_bodies_pe'])
 
-# Number of bodies - hardcoded?
+# Number of bodies
 N = 10000
 
 # Validate cube constraint
