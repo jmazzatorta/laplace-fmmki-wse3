@@ -16,6 +16,10 @@ param cell_size : f32;
 // Tree height
 const TREE_H : u8 = 6;
 
+// PE coordinates
+param pe_x;
+param pe_y;
+
 // Cell id and coordinates
 param morton_id : u32;
 param cell_x : u16;
@@ -60,10 +64,52 @@ fn get_level_id(morton : u32, l : u8) u32 {
 param P : u16;
 param N_COEFFS : u16;
 const C_BUF_SIZE : u16 = N_COEFFS * 2;
+const N_COEFFS_V : u16 = (2*P+1) * (2*P+2) / 2;
+const C_BUF_M2L_SIZE : u16 = N_COEFFS_V * 2;
 
 // Global tracker level in which computation currently is
 // Handled by upward_phase() main function
 var L : u8;
+
+
+// --- TABLES ---
+
+const M2M_N_ENTRIES : u16 = 755;
+const M2L_N_ENTRIES : u16 = 3645;
+const N_BUCKETS     : u16 = N_COEFFS + 1;  // 46 (offsets array length)
+
+// M2M tables
+var m2m_offsets       = @zeros([N_BUCKETS]u16);
+var m2m_child_indices = @zeros([M2M_N_ENTRIES]u16);
+var m2m_v_indices     = @zeros([M2M_N_ENTRIES]u16);
+var m2m_sign_rr       = @zeros([M2M_N_ENTRIES]f32);
+var m2m_sign_ri       = @zeros([M2M_N_ENTRIES]f32);
+var m2m_sign_ir       = @zeros([M2M_N_ENTRIES]f32);
+var m2m_sign_ii       = @zeros([M2M_N_ENTRIES]f32);
+
+// M2L tables
+var m2l_offsets        = @zeros([N_BUCKETS]u16);
+var m2l_source_indices = @zeros([M2L_N_ENTRIES]u16);
+var m2l_v_indices      = @zeros([M2L_N_ENTRIES]u16);
+var m2l_sign_rr        = @zeros([M2L_N_ENTRIES]f32);
+var m2l_sign_ri        = @zeros([M2L_N_ENTRIES]f32);
+var m2l_sign_ir        = @zeros([M2L_N_ENTRIES]f32);
+var m2l_sign_ii        = @zeros([M2L_N_ENTRIES]f32);
+
+
+// --- AGENDAS ---
+
+const MAX_AGENDA : u16 = 189;
+
+var m2l_agenda_lvl2 = @zeros([MAX_AGENDA]u32);
+var m2l_agenda_lvl3 = @zeros([MAX_AGENDA]u32);
+var m2l_agenda_lvl4 = @zeros([MAX_AGENDA]u32);
+var m2l_agenda_lvl5 = @zeros([MAX_AGENDA]u32);
+
+var num_targets_lvl2 = @zeros([1]u32);
+var num_targets_lvl3 = @zeros([1]u32);
+var num_targets_lvl4 = @zeros([1]u32);
+var num_targets_lvl5 = @zeros([1]u32);
 
 
 // --- COLORS and FABRIC QUEUES ---
@@ -98,6 +144,24 @@ const oq = [6]output_queue{
     @get_output_queue(5), @get_output_queue(6), @get_output_queue(7),
 };
 
+// Colors and queue bindings for free movements
+param color_e1 : color; 
+param color_e2 : color; 
+param color_e3 : color;
+param color_e4 : color; 
+param color_o1 : color; 
+param color_o2 : color;
+param color_o3 : color;
+param color_o4 : color;
+const n_iq = @get_input_queue(8);
+const e_iq = @get_input_queue(9);
+const s_iq = @get_input_queue(10);
+const w_iq = @get_input_queue(11);
+const n_oq = @get_output_queue(8);
+const e_oq = @get_output_queue(9);
+const s_oq = @get_output_queue(10);
+const w_oq = @get_output_queue(11);
+
 
 // --- BUFFERS ---
 
@@ -125,6 +189,7 @@ var parent_buf = @zeros([C_BUF_SIZE]f32);
 
 // Translation vector solid harmonic coefficients
 var v_buf = @zeros([C_BUF_SIZE]f32);
+var v_buf_m2l = @zeros([C_BUF_M2L_SIZE]f32);
 
 // --- GLOBAL VARIABLES ---
 
@@ -193,11 +258,59 @@ const g_coeff_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{C_BUF_SIZE} -> g
 // Contribution DSD (spherical harmonic)
 const contrib_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{C_BUF_SIZE} -> contrib_buf[i] });
 
+// Free movements DSDs (M2L)
+// Header DSDs
+const m2l_rx_header_east = @get_dsd(fabin_dsd, .{
+    .fabric_color = if (pe_x % 2 == 0) color_o1 else color_e1,
+    .extent = 1,
+    .input_queue = e_iq
+});
+const m2l_rx_header_west = @get_dsd(fabin_dsd, .{
+    .fabric_color = if (pe_x % 2 == 0) color_o3 else color_e3,
+    .extent = 1,
+    .input_queue = w_iq
+});
+const m2l_rx_header_north = @get_dsd(fabin_dsd, .{
+    .fabric_color = if (pe_y % 2 == 0) color_o2 else color_e2,
+    .extent = 1,
+    .input_queue = n_iq
+});
+const m2l_rx_header_south = @get_dsd(fabin_dsd, .{
+    .fabric_color = if (pe_y % 2 == 0) color_o4 else color_e4,
+    .extent = 1,
+    .input_queue = s_iq
+});
+
+// Payload DSDs
+const m2l_rx_payload_east = @get_dsd(fabin_dsd, .{
+    .fabric_color = if (pe_x % 2 == 0) color_o1 else color_e1,
+    .extent = 45,
+    .input_queue = e_iq
+});
+const m2l_rx_payload_west = @get_dsd(fabin_dsd, .{
+    .fabric_color = if (pe_x % 2 == 0) color_o3 else color_e3,
+    .extent = 45,
+    .input_queue = w_iq
+});
+const m2l_rx_payload_north = @get_dsd(fabin_dsd, .{
+    .fabric_color = if (pe_y % 2 == 0) color_o2 else color_e2,
+    .extent = 45,
+    .input_queue = n_iq
+});
+const m2l_rx_payload_south = @get_dsd(fabin_dsd, .{
+    .fabric_color = if (pe_y % 2 == 0) color_o4 else color_e4,
+    .extent = 45,
+    .input_queue = s_iq
+});
+
 
 // --- TASKS IDs ---
 
 // Task ID for m2m pipeline management
 const m2m_pipeline_task_id: local_task_id = @get_local_task_id(8);
+
+// Task ID for m2m routing 
+const m2l_routing_task_id: local_task_id = @get_local_task_id(9);
 
 
 // --- RUNTIME LAYOUT ---
@@ -237,10 +350,32 @@ fn pipeline_step(comptime l: u8) void {
 
     if (use_first) {
         @fmovs(mem_rx_buf_1, fab_in_data, .{ .async=true, .activate = m2m_pipeline_task_id });
-        kernels.m2m_translate(&v_buf, &rx_buf_2, &parent_buf);
+        kernels.m2m_translate(
+            &v_buf, 
+            &rx_buf_2,
+            &parent_buf,
+            &m2m_offsets, 
+            &m2m_child_indices, 
+            &m2m_v_indices,
+            &m2m_sign_rr, 
+            &m2m_sign_ri, 
+            &m2m_sign_ir, 
+            &m2m_sign_ii
+        );
     } else {
         @fmovs(mem_rx_buf_2, fab_in_data, .{ .async=true, .activate = m2m_pipeline_task_id });
-        kernels.m2m_translate(&v_buf, &rx_buf_1, &parent_buf);
+            kernels.m2m_translate(
+            &v_buf, 
+            &rx_buf_1,
+            &parent_buf,
+            &m2m_offsets, 
+            &m2m_child_indices, 
+            &m2m_v_indices,
+            &m2m_sign_rr, 
+            &m2m_sign_ri, 
+            &m2m_sign_ir, 
+            &m2m_sign_ii
+        );
     }
 
     n_processed += 1;
@@ -262,9 +397,31 @@ task m2m_pipeline_task() void {
 
         // Translate last remaining child harmonic
         if (use_first) {
-            kernels.m2m_translate(&v_buf, &rx_buf_1, &parent_buf);
+            kernels.m2m_translate(
+                &v_buf, 
+                &rx_buf_1,
+                &parent_buf,
+                &m2m_offsets, 
+                &m2m_child_indices, 
+                &m2m_v_indices,
+                &m2m_sign_rr, 
+                &m2m_sign_ri, 
+                &m2m_sign_ir, 
+                &m2m_sign_ii
+            );
         } else {
-            kernels.m2m_translate(&v_buf, &rx_buf_2, &parent_buf);
+            kernels.m2m_translate(
+                &v_buf, 
+                &rx_buf_2,
+                &parent_buf,
+                &m2m_offsets, 
+                &m2m_child_indices, 
+                &m2m_v_indices,
+                &m2m_sign_rr, 
+                &m2m_sign_ri, 
+                &m2m_sign_ir, 
+                &m2m_sign_ii
+            );
         }
 
         // Update global coefficients for the next upward jump 
@@ -318,6 +475,15 @@ task m2m_pipeline_task() void {
     @unblock(m2m_pipeline_task_id);
 }
 
+
+// --- M2L ROUTING TASK ---
+
+task m2l_routing_task() void {
+    var header = @zeros([1]u32);
+
+}
+
+
 // --- UPWARD LEVEL FUNCTION  ---
 
 fn upward_level(comptime l: u8) void {
@@ -335,8 +501,18 @@ fn upward_level(comptime l: u8) void {
     kernels.compute_solid_harmonics(t_vec[0], t_vec[1], t_vec[2], &v_buf);
 
     // M2M local translation
-    kernels.m2m_translate(&v_buf, &g_coeff_buf, &parent_buf);
-
+    kernels.m2m_translate(
+        &v_buf, 
+        &g_coeff_buf,
+        &parent_buf,
+        &m2m_offsets, 
+        &m2m_child_indices, 
+        &m2m_v_indices,
+        &m2m_sign_rr, 
+        &m2m_sign_ri, 
+        &m2m_sign_ir, 
+        &m2m_sign_ii
+    );
 
     const fab_out_token = get_down_out_dsd(l, 1);
     const fab_in_data = get_up_in_dsd(l, C_BUF_SIZE);
@@ -413,7 +589,8 @@ fn compute_p2m() void {
     }
 
     // Extract the count of the body from buffer
-    const count : u16 = @as(u16, bodies[1]);
+    // const count : u16 = @as(u16, bodies[1]);
+    const count : u32 = bodies[1];
     const bodies_offset : u16 = 2;
 
     for (@range(u16, count)) |b| {
@@ -455,13 +632,76 @@ comptime {
         @initialize_queue(iq[parent_lvl], .{ .color = colors_down[parent_lvl] });
     }
 
+    // Initialize queues for free movements
+    if (pe_x % 2 == 0) {
+        @initialize_queue(e_iq, .{ .color = color_o3 });
+        @initialize_queue(w_iq, .{ .color = color_o1 });
+    } else {
+        @initialize_queue(e_iq, .{ .color = color_e3 }); 
+        @initialize_queue(w_iq, .{ .color = color_e1 }); 
+    }
+    if (pe_y % 2 == 0) {
+        @initialize_queue(n_iq, .{ .color = color_o4 });
+        @initialize_queue(s_iq, .{ .color = color_o2 });
+    } else {
+        @initialize_queue(n_iq, .{ .color = color_e4 }); 
+        @initialize_queue(s_iq, .{ .color = color_e2 }); 
+    }
+
+    // Initialize output queues for free movements
+    if (pe_x % 2 == 0) {
+        @initialize_queue(e_oq, .{ .color = color_e1 }); 
+        @initialize_queue(w_oq, .{ .color = color_e3 }); 
+    } else {
+        @initialize_queue(e_oq, .{ .color = color_o1 }); 
+        @initialize_queue(w_oq, .{ .color = color_o3 }); 
+    }
+    
+    if (pe_y % 2 == 0) {
+        @initialize_queue(n_oq, .{ .color = color_e2 }); 
+        @initialize_queue(s_oq, .{ .color = color_e4 }); 
+    } else {
+        @initialize_queue(n_oq, .{ .color = color_o2 }); 
+        @initialize_queue(s_oq, .{ .color = color_o4 }); 
+    }
+
     // Local tasks binding
     @bind_local_task(m2m_pipeline_task, m2m_pipeline_task_id);
+    @bind_local_task(m2l_routing_task, m2l_routing_task_id);
 
 }
 
 layout {
-    // Export symbols to host
+
+    // Main function
     @export_name("upward_phase", fn()void);
+
+    // Bodies
     @export_name("bodies", [*]u32);
+
+    // Math tables
+    @export_name("m2m_offsets",        [*]u16);
+    @export_name("m2m_child_indices",  [*]u16);
+    @export_name("m2m_v_indices",      [*]u16);
+    @export_name("m2m_sign_rr",        [*]f32);
+    @export_name("m2m_sign_ri",        [*]f32);
+    @export_name("m2m_sign_ir",        [*]f32);
+    @export_name("m2m_sign_ii",        [*]f32);
+    @export_name("m2l_offsets",        [*]u16);
+    @export_name("m2l_source_indices", [*]u16);
+    @export_name("m2l_v_indices",      [*]u16);
+    @export_name("m2l_sign_rr",        [*]f32);
+    @export_name("m2l_sign_ri",        [*]f32);
+    @export_name("m2l_sign_ir",        [*]f32);
+    @export_name("m2l_sign_ii",        [*]f32);
+
+    // M2L agendas
+    @export_name("m2l_agenda_lvl2", [*]u32);
+    @export_name("m2l_agenda_lvl3", [*]u32);
+    @export_name("m2l_agenda_lvl4", [*]u32);
+    @export_name("m2l_agenda_lvl5", [*]u32);
+    @export_name("num_targets_lvl2", [*]u32);
+    @export_name("num_targets_lvl3", [*]u32);
+    @export_name("num_targets_lvl4", [*]u32);
+    @export_name("num_targets_lvl5", [*]u32);
 }

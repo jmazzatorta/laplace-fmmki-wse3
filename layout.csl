@@ -25,7 +25,7 @@ const grid_side : u16 = @as(u16, 1) << ((MORTON_BITS + 1) / 2);
 const P : u16 = 8;
 const N_COEFFS : u16 = (P + 1) * (P + 2) / 2;
 
-// Colors - Upward 
+// Colors - Upward Tree
 const color_U1 = @get_color(3);
 const color_U2 = @get_color(4);
 const color_U3 = @get_color(5);
@@ -33,13 +33,23 @@ const color_U4 = @get_color(6);
 const color_U5 = @get_color(7);
 const color_U6 = @get_color(8);
 
-// Colors - Downward 
+// Colors - Downward Tree
 const color_D1 = @get_color(9);
 const color_D2 = @get_color(10);
 const color_D3 = @get_color(11);
 const color_D4 = @get_color(12);
 const color_D5 = @get_color(13);
 const color_D6 = @get_color(14);
+
+// Colors - Free Move 
+const color_E1 = @get_color(15);
+const color_E2 = @get_color(16);
+const color_E3 = @get_color(17);
+const color_E4 = @get_color(18);
+const color_O1 = @get_color(19);
+const color_O2 = @get_color(20);
+const color_O3 = @get_color(21);
+const color_O4 = @get_color(22);
 
 // Colors - Memcpy
 const color_memcpy_h2d = @get_color(MEMCPY_H2D_ID);
@@ -95,6 +105,14 @@ layout {
         .color_d4 = color_D4,
         .color_d5 = color_D5,
         .color_d6 = color_D6,
+        .color_e1 = color_E1,
+        .color_e2 = color_E2,
+        .color_e3 = color_E3,
+        .color_e4 = color_E4,
+        .color_o1 = color_O1,
+        .color_o2 = color_O2,
+        .color_o3 = color_O3,
+        .color_o4 = color_O4,
     };
 
     // Assign PE code
@@ -108,12 +126,12 @@ layout {
                         .cell_x = coords_3d[0],
                         .cell_y = coords_3d[1],
                         .cell_z = coords_3d[2],
-                        .memcpy_params = memcpy_mod.get_params(pe_x),
+                        .memcpy_params = memcpy_mod.get_params(pe_x,pe_y),
             }));
         }
     }
 
-    // Routes up
+    // Routes up tree
     const RX_E_TX_W    = .{ .rx = .{EAST},  .tx = .{WEST}  };
     const RX_S_TX_N    = .{ .rx = .{SOUTH}, .tx = .{NORTH} };
     const RX_E_TX_N    = .{ .rx = .{EAST},  .tx = .{NORTH} };
@@ -121,13 +139,22 @@ layout {
     const RX_E_TX_R    = .{ .rx = .{EAST},  .tx = .{RAMP} };
     const RX_S_TX_R    = .{ .rx = .{SOUTH}, .tx = .{RAMP} };
 
-    // Routes down
+    // Routes down tree
     const RX_W_TX_E    = .{ .rx = .{WEST},  .tx = .{EAST} };
     const RX_N_TX_S    = .{ .rx = .{NORTH}, .tx = .{SOUTH} };
     const RX_W_TX_ER   = .{ .rx = .{WEST},  .tx = .{EAST,RAMP} };
     const RX_N_TX_ER   = .{ .rx = .{NORTH}, .tx = .{EAST,RAMP} };     
     const RX_N_TX_ESR  = .{ .rx = .{NORTH}, .tx = .{EAST,SOUTH,RAMP} };
     const RX_R_TX_ES   = .{ .rx = .{RAMP}, .tx = .{EAST, SOUTH} };
+
+    // Routes free move 
+    const RX_R_TX_N  = .{ .rx = .{RAMP}, .tx = .{NORTH} };
+    const RX_R_TX_E  = .{ .rx = .{RAMP}, .tx = .{EAST} };
+    const RX_R_TX_S  = .{ .rx = .{RAMP}, .tx = .{SOUTH}};
+    const RX_R_TX_W  = .{ .rx = .{RAMP}, .tx = .{WEST} };
+
+    const RX_N_TX_R  = .{ .rx = .{NORTH}, .tx = .{RAMP}};
+    const RX_W_TX_R  = .{ .rx = .{WEST} , .tx = .{RAMP}};
 
     // Block distances per level
     const b_dist_y = [6]u16{512,128,64,16,8,2};
@@ -136,7 +163,6 @@ layout {
     // Color arrays per level (L1..L6)
     const lev_col_up   = [6]color{ color_U1, color_U2, color_U3, color_U4, color_U5, color_U6 };
     const lev_col_down = [6]color{ color_D1, color_D2, color_D3, color_D4, color_D5, color_D6 };
-
 
     for (@range(u16, grid_side)) |pe_y| {
 
@@ -241,6 +267,35 @@ layout {
                 }
 
                 is_vertical = !is_vertical;
+            }
+        }
+    }
+
+    for (@range(u16, grid_side)) |pe_y| {
+        for (@range(u16, grid_side)) |pe_x| {
+
+            if (pe_x % 2 == 0) {
+                @set_color_config(pe_x, pe_y, color_E1, .{ .routes = RX_R_TX_E });
+                @set_color_config(pe_x, pe_y, color_O1, .{ .routes = RX_W_TX_R });
+                @set_color_config(pe_x, pe_y, color_E3, .{ .routes = RX_R_TX_W });
+                @set_color_config(pe_x, pe_y, color_O3, .{ .routes = RX_E_TX_R });
+            } else {
+                @set_color_config(pe_x, pe_y, color_O1, .{ .routes = RX_R_TX_E });
+                @set_color_config(pe_x, pe_y, color_E1, .{ .routes = RX_W_TX_R });
+                @set_color_config(pe_x, pe_y, color_O3, .{ .routes = RX_R_TX_W });
+                @set_color_config(pe_x, pe_y, color_E3, .{ .routes = RX_E_TX_R });
+            }
+
+            if (pe_y % 2 == 0) {
+                @set_color_config(pe_x, pe_y, color_E2, .{ .routes = RX_R_TX_N });
+                @set_color_config(pe_x, pe_y, color_O2, .{ .routes = RX_S_TX_R });
+                @set_color_config(pe_x, pe_y, color_E4, .{ .routes = RX_R_TX_S });
+                @set_color_config(pe_x, pe_y, color_O4, .{ .routes = RX_N_TX_R });
+            } else {
+                @set_color_config(pe_x, pe_y, color_O2, .{ .routes = RX_R_TX_N });
+                @set_color_config(pe_x, pe_y, color_E2, .{ .routes = RX_S_TX_R });
+                @set_color_config(pe_x, pe_y, color_O4, .{ .routes = RX_R_TX_S });
+                @set_color_config(pe_x, pe_y, color_E4, .{ .routes = RX_N_TX_R });
             }
         }
     }
