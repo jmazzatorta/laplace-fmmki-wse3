@@ -174,6 +174,10 @@ def gen_m2l_tables():
 
     return offsets, source_indices, v_indices, sign_rr, sign_ri, sign_ir, sign_ii
 
+def gen_l2l_tables():
+    offsets, source_indices, v_indices, sign_rr, sign_ri, sign_ir, sign_ii = gen_m2m_tables()
+    return offsets, source_indices, v_indices, sign_rr, sign_ri, sign_ir, sign_ii
+
 def morton_encode_2d(pe_x, pe_y):
     morton_id = 0
     for i in range(9):
@@ -299,6 +303,7 @@ def gen_binary_blob():
     print("[1/3] Generating M2M and M2L tables...")
     m2m_out = gen_m2m_tables()
     m2l_out = gen_m2l_tables()
+    l2l_out = gen_l2l_tables()
     
     print("[2/3] Generating M2L agendas...")
     pe_schedules, il_sizes, debug_edges = gen_routing_agendas()
@@ -338,6 +343,15 @@ def gen_binary_blob():
                 "sign_ri":        np.array(m2l_out[4], dtype=np.float32),
                 "sign_ir":        np.array(m2l_out[5], dtype=np.float32),
                 "sign_ii":        np.array(m2l_out[6], dtype=np.float32),
+            },
+            "l2l": {
+                "offsets":        np.array(l2l_out[0], dtype=np.uint16),
+                "source_indices": np.array(l2l_out[1], dtype=np.uint16),
+                "v_indices":      np.array(l2l_out[2], dtype=np.uint16),
+                "sign_rr":        np.array(l2l_out[3], dtype=np.float32),
+                "sign_ri":        np.array(l2l_out[4], dtype=np.float32),
+                "sign_ir":        np.array(l2l_out[5], dtype=np.float32),
+                "sign_ii":        np.array(l2l_out[6], dtype=np.float32),
             }
         },
         "routing": {

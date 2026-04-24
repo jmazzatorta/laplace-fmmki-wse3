@@ -105,6 +105,7 @@ def broadcast_array(grid_side, arr):
 def pack_m2l_agendas(grid_side, pe_schedules, level, max_agenda=MAX_AGENDA):
     agenda_3d = np.zeros((grid_side, grid_side, max_agenda), dtype=np.uint32)
     counts_2d = np.zeros((grid_side, grid_side),             dtype=np.uint32)
+    expected_rx_2d = np.zeros((grid_side, grid_side),        dtype=np.uint32)
     for (px, py), sched in pe_schedules.items():
         if level in sched:
             hdrs = sched[level]
@@ -112,7 +113,11 @@ def pack_m2l_agendas(grid_side, pe_schedules, level, max_agenda=MAX_AGENDA):
             assert n <= max_agenda, f"Agenda at ({px},{py}) lvl {level} has {n} > MAX_AGENDA"
             agenda_3d[py, px, :n] = hdrs
             counts_2d[py, px]     = n
-    return agenda_3d, counts_2d
+            for hdr in hdrs:
+                tgt_x = (hdr >> 23) & 0x1FF
+                tgt_y = (hdr >> 14) & 0x1FF
+                expected_rx_2d[tgt_y, tgt_x] += 1
+    return agenda_3d, counts_2d, expected_rx_2d
 
 def h2d_broadcast_u16(runner, symbol, arr_u16, grid_side, elems_per_pe):
     tensor = broadcast_array(grid_side, arr_u16.astype(np.uint16))
@@ -192,20 +197,16 @@ def main():
     )
 
     print(f"\n[3/5] Packing per-PE M2L agendas ...")
-    agenda_tensors = {}   # level -> (agenda_3d, counts_2d)
+    agenda_tensors = {}   # level -> (agenda_3d, counts_2d, expected_rx_2d)
     for lvl in M2L_LEVELS:
-        a, c = pack_m2l_agendas(grid_side, pe_schedules, lvl)
-        agenda_tensors[lvl] = (a, c)
+        a, c, rx = pack_m2l_agendas(grid_side, pe_schedules, lvl)
+        agenda_tensors[lvl] = (a, c, rx)
         active = int((c > 0).sum())
         print(f"      lvl {lvl}: active PEs = {active:>6}, max IL = {int(c.max())}")
 
     print(f"\n[4/5] Loading kernel onto device ...")
     runner = SdkRuntime(args.name, cmaddr=args.cmaddr)
 
-    # NOTE: `runner.load()` puts the ELF on the device. The CSL `main` does
-    # NOT start automatically for kernels that expose functions via
-    # @export_name; they must be explicitly launched. So we load first, push
-    # all data, then `launch("upward_phase")`.
     runner.load()
 
     sym = {
@@ -227,11 +228,23 @@ def main():
         "m2l_sign_ri":        runner.get_id("m2l_sign_ri"),
         "m2l_sign_ir":        runner.get_id("m2l_sign_ir"),
         "m2l_sign_ii":        runner.get_id("m2l_sign_ii"),
+        # L2L tables
+        "l2l_offsets":        runner.get_id("l2l_offsets"),
+        "l2l_source_indices": runner.get_id("l2l_source_indices"),
+        "l2l_v_indices":      runner.get_id("l2l_v_indices"),
+        "l2l_sign_rr":        runner.get_id("l2l_sign_rr"),
+        "l2l_sign_ri":        runner.get_id("l2l_sign_ri"),
+        "l2l_sign_ir":        runner.get_id("l2l_sign_ir"),
+        "l2l_sign_ii":        runner.get_id("l2l_sign_ii"),
+        # Output  
+        "forces_buf":         runner.get_id("forces_buf"),
+
     }
-    # M2L agendas (one symbol per level)
+    # M2L agendas
     for lvl in M2L_LEVELS:
         sym[f"m2l_agenda_lvl{lvl}"]  = runner.get_id(f"m2l_agenda_lvl{lvl}")
         sym[f"num_targets_lvl{lvl}"] = runner.get_id(f"num_targets_lvl{lvl}")
+        sym[f"expected_rx_lvl{lvl}"] = runner.get_id(f"expected_rx_lvl{lvl}")
 
     print(f"\n[5/5] Pushing data to device ...")
     t0 = time.time()
@@ -254,10 +267,20 @@ def main():
     h2d_broadcast_f32(runner, sym["m2l_sign_ir"],        m2l["sign_ir"],        grid_side, m2l["sign_ir"].shape[0])
     h2d_broadcast_f32(runner, sym["m2l_sign_ii"],        m2l["sign_ii"],        grid_side, m2l["sign_ii"].shape[0])
 
+    l2l = math["l2l"]
+    h2d_broadcast_u16(runner, sym["l2l_offsets"],        l2l["offsets"],        grid_side, l2l["offsets"].shape[0])
+    h2d_broadcast_u16(runner, sym["l2l_source_indices"], l2l["source_indices"], grid_side, l2l["source_indices"].shape[0])
+    h2d_broadcast_u16(runner, sym["l2l_v_indices"],      l2l["v_indices"],      grid_side, l2l["v_indices"].shape[0])
+    h2d_broadcast_f32(runner, sym["l2l_sign_rr"],        l2l["sign_rr"],        grid_side, l2l["sign_rr"].shape[0])
+    h2d_broadcast_f32(runner, sym["l2l_sign_ri"],        l2l["sign_ri"],        grid_side, l2l["sign_ri"].shape[0])
+    h2d_broadcast_f32(runner, sym["l2l_sign_ir"],        l2l["sign_ir"],        grid_side, l2l["sign_ir"].shape[0])
+    h2d_broadcast_f32(runner, sym["l2l_sign_ii"],        l2l["sign_ii"],        grid_side, l2l["sign_ii"].shape[0])
+
     for lvl in M2L_LEVELS:
-        agenda_3d, counts_2d = agenda_tensors[lvl]
+        agenda_3d, counts_2d, expected_rx_2d = agenda_tensors[lvl]
         h2d_per_pe_u32(runner, sym[f"m2l_agenda_lvl{lvl}"],  agenda_3d, grid_side, MAX_AGENDA)
         h2d_per_pe_u32(runner, sym[f"num_targets_lvl{lvl}"], counts_2d, grid_side, 1)
+        h2d_per_pe_u32(runner, sym[f"expected_rx_lvl{lvl}"], expected_rx_2d, grid_side, 1)
 
     h2d_per_pe_u32(runner, sym["bodies"],
                    bodies_flat.reshape(grid_side, grid_side, per_elem_pe),
@@ -268,20 +291,32 @@ def main():
 
     print(f"\nLaunching upward_phase ...")
     t0 = time.time()
-    runner.launch("upward_phase", nonblock=False)
+    runner.launch("start_fmm", nonblock=False)
     t1 = time.time()
     print(f"      upward_phase wall-clock : {t1 - t0:.3f} s")
 
-    # -------------------------------------------------------------------
-    # 7. TODO: retrieve results via memcpy_d2h (L2P output), verify, stop
-    # -------------------------------------------------------------------
-    # Example placeholder:
-    #   out = np.zeros(grid_side * grid_side * N_OUT_PER_PE, dtype=np.float32)
-    #   runner.memcpy_d2h(out, sym["output_buffer"],
-    #                     0, 0, grid_side, grid_side, N_OUT_PER_PE,
-    #                     streaming=False,
-    #                     data_type=MemcpyDataType.MEMCPY_32BIT,
-    #                     nonblock=False, order=MemcpyOrder.ROW_MAJOR)
+    print(f"\n[6/6] Retrieving forces_buf from device ...")
+    t0 = time.time()
+    
+    forces_out = np.zeros(grid_side * grid_side * max_bodies_pe * FLOATS_PER_BODY, dtype=np.float32)
+    
+    runner.memcpy_d2h(
+        forces_out, sym["forces_buf"],
+        0, 0, grid_side, grid_side, max_bodies_pe * FLOATS_PER_BODY,
+        streaming=False,
+        data_type=MemcpyDataType.MEMCPY_32BIT,
+        nonblock=False, 
+        order=MemcpyOrder.ROW_MAJOR
+    )
+    
+    t1 = time.time()
+    print(f"      Data pull wall-clock : {t1 - t0:.2f} s")
+    
+    forces_3d = forces_out.reshape(grid_side, grid_side, max_bodies_pe, FLOATS_PER_BODY)
+    
+    total_forces_computed = np.count_nonzero(forces_3d)
+    print(f"\nSimulation Complete!")
+    print(f"Non-zero output elements retrieved: {total_forces_computed}")
 
     runner.stop()
     print("\nDone.")

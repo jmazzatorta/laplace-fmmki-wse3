@@ -16,7 +16,6 @@ const cell_size : f32 = prob_range / @as(f32, cells_per_side);
 
 // 2D mesh side length
 // cells_per_side=64 -> BITS=6, MORTON_BITS=18, grid_side=512
-// log(cells_per_side)
 const BITS : u16 = 6;
 const MORTON_BITS : u16 = 3 * BITS;
 const grid_side : u16 = @as(u16, 1) << ((MORTON_BITS + 1) / 2);
@@ -25,31 +24,15 @@ const grid_side : u16 = @as(u16, 1) << ((MORTON_BITS + 1) / 2);
 const P : u16 = 8;
 const N_COEFFS : u16 = (P + 1) * (P + 2) / 2;
 
-// Colors - Upward Tree
-const color_U1 = @get_color(3);
-const color_U2 = @get_color(4);
-const color_U3 = @get_color(5);
-const color_U4 = @get_color(6);
-const color_U5 = @get_color(7);
-const color_U6 = @get_color(8);
-
-// Colors - Downward Tree
-const color_D1 = @get_color(9);
-const color_D2 = @get_color(10);
-const color_D3 = @get_color(11);
-const color_D4 = @get_color(12);
-const color_D5 = @get_color(13);
-const color_D6 = @get_color(14);
-
-// Colors - Free Move 
-const color_E1 = @get_color(15);
-const color_E2 = @get_color(16);
-const color_E3 = @get_color(17);
-const color_E4 = @get_color(18);
-const color_O1 = @get_color(19);
-const color_O2 = @get_color(20);
-const color_O3 = @get_color(21);
-const color_O4 = @get_color(22);
+// Colors - Universal Wormhole Routing (Ping-Pong)
+const color_E1 = @get_color(3);
+const color_E2 = @get_color(4);
+const color_E3 = @get_color(5);
+const color_E4 = @get_color(6);
+const color_O1 = @get_color(7);
+const color_O2 = @get_color(8);
+const color_O3 = @get_color(9);
+const color_O4 = @get_color(10);
 
 // Colors - Memcpy
 const color_memcpy_h2d = @get_color(MEMCPY_H2D_ID);
@@ -91,20 +74,6 @@ layout {
         .prob_range = prob_range,
         .max_bodies_pe = max_bodies_pe,
         .cell_size = cell_size,
-        .P = P,
-        .N_COEFFS = N_COEFFS,
-        .color_u1 = color_U1,
-        .color_u2 = color_U2,
-        .color_u3 = color_U3,
-        .color_u4 = color_U4,
-        .color_u5 = color_U5,
-        .color_u6 = color_U6,
-        .color_d1 = color_D1,
-        .color_d2 = color_D2,
-        .color_d3 = color_D3,
-        .color_d4 = color_D4,
-        .color_d5 = color_D5,
-        .color_d6 = color_D6,
         .color_e1 = color_E1,
         .color_e2 = color_E2,
         .color_e3 = color_E3,
@@ -122,154 +91,23 @@ layout {
             const coords_3d = morton_decode(morton_2d);
 
             @set_tile_code(pe_x, pe_y, "pe.csl", @concat_structs(common_params, .{
-                        .morton_id = morton_2d,
-                        .cell_x = coords_3d[0],
-                        .cell_y = coords_3d[1],
-                        .cell_z = coords_3d[2],
-                        .memcpy_params = memcpy_mod.get_params(pe_x,pe_y),
+                .parity_x = pe_x % 2,
+                .parity_y = pe_y % 2,
+                .memcpy_params = memcpy_mod.get_params(pe_x)
             }));
         }
     }
 
-    // Routes up tree
-    const RX_E_TX_W    = .{ .rx = .{EAST},  .tx = .{WEST}  };
-    const RX_S_TX_N    = .{ .rx = .{SOUTH}, .tx = .{NORTH} };
-    const RX_E_TX_N    = .{ .rx = .{EAST},  .tx = .{NORTH} };
-    const RX_S_TX_W    = .{ .rx = .{SOUTH}, .tx = .{WEST} };
-    const RX_E_TX_R    = .{ .rx = .{EAST},  .tx = .{RAMP} };
-    const RX_S_TX_R    = .{ .rx = .{SOUTH}, .tx = .{RAMP} };
-
-    // Routes down tree
-    const RX_W_TX_E    = .{ .rx = .{WEST},  .tx = .{EAST} };
-    const RX_N_TX_S    = .{ .rx = .{NORTH}, .tx = .{SOUTH} };
-    const RX_W_TX_ER   = .{ .rx = .{WEST},  .tx = .{EAST,RAMP} };
-    const RX_N_TX_ER   = .{ .rx = .{NORTH}, .tx = .{EAST,RAMP} };     
-    const RX_N_TX_ESR  = .{ .rx = .{NORTH}, .tx = .{EAST,SOUTH,RAMP} };
-    const RX_R_TX_ES   = .{ .rx = .{RAMP}, .tx = .{EAST, SOUTH} };
-
-    // Routes free move 
+    // Routes Universal Wormhole 
     const RX_R_TX_N  = .{ .rx = .{RAMP}, .tx = .{NORTH} };
-    const RX_R_TX_E  = .{ .rx = .{RAMP}, .tx = .{EAST} };
-    const RX_R_TX_S  = .{ .rx = .{RAMP}, .tx = .{SOUTH}};
-    const RX_R_TX_W  = .{ .rx = .{RAMP}, .tx = .{WEST} };
+    const RX_R_TX_E  = .{ .rx = .{RAMP}, .tx = .{EAST}  };
+    const RX_R_TX_S  = .{ .rx = .{RAMP}, .tx = .{SOUTH} };
+    const RX_R_TX_W  = .{ .rx = .{RAMP}, .tx = .{WEST}  };
 
-    const RX_N_TX_R  = .{ .rx = .{NORTH}, .tx = .{RAMP}};
-    const RX_W_TX_R  = .{ .rx = .{WEST} , .tx = .{RAMP}};
-
-    // Block distances per level
-    const b_dist_y = [6]u16{512,128,64,16,8,2};
-    const b_dist_x = [6]u16{512,256,64,32,8,4};
-
-    // Color arrays per level (L1..L6)
-    const lev_col_up   = [6]color{ color_U1, color_U2, color_U3, color_U4, color_U5, color_U6 };
-    const lev_col_down = [6]color{ color_D1, color_D2, color_D3, color_D4, color_D5, color_D6 };
-
-    for (@range(u16, grid_side)) |pe_y| {
-
-        for (@range(u16, grid_side)) |pe_x| {
-
-            // Boolean variable to track the rotation of rectangle
-            var is_vertical : bool = true;
-
-            // Loop over each level of the tree
-            for (@range(u8, 6)) |l| {
-                var c_down : color = lev_col_down[l];
-                var c_up   : color = lev_col_up[l];
-
-                // Position inside the block
-                const local_x = pe_x % b_dist_x[l];
-                const local_y = pe_y % b_dist_y[l];
-
-                // Dimension of the cells in level l (sub-block dimensions)
-                const step_x = if (l % 2 == 0) b_dist_x[l] / 2 else b_dist_x[l] / 4;
-                const step_y = if (l % 2 == 0) b_dist_y[l] / 4 else b_dist_y[l] / 2;
-
-                // PE lanes
-                const on_v_lane = (local_x == 0); 
-                const on_h_lane = (local_y % step_y == 0); 
-                const is_node   = (local_x % step_x == 0 and local_y % step_y == 0);
-
-                if (is_node) {
-
-                    // Role flags
-                    const is_parent      = (local_x == 0 and local_y == 0);
-                    const is_first_col   = (local_x == 0);
-                    const is_first_row   = (local_y == 0);
-                    const is_last_in_col = (is_first_col and local_y == b_dist_y[l] - step_y);
-
-                    // Downward routing 
-                    if (is_parent) {
-                        // Father broadcast
-                        @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_R_TX_ES });
-                    } else if (is_first_col and !is_last_in_col) {
-                        // First column, middle rows 
-                        @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_N_TX_ESR });
-                    } else if (is_first_col and is_last_in_col) {
-                        // First column, last row 
-                        @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_N_TX_ER });
-                    } else {
-                        // Other columns
-                        @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_W_TX_ER });
-                    }
-
-                    if (is_vertical) {
-
-                        // Upward routing
-                        if (is_parent) {
-                            // Father receive
-                            // Modifica a runtime (S -> E)
-                            @set_color_config(pe_x, pe_y, c_up, .{ 
-                                .routes = RX_S_TX_R, 
-                                .switches = .{ 
-                                    .pos1 = .{ .rx = EAST, .tx = RAMP }, 
-                                    .ring_mode = true,
-                                    .pop_mode = .{ .pop_on_advance = true}
-                                }
-                            }); 
-                        } else if (is_first_row) {
-                            // First row, last column 
-                            @set_color_config(pe_x, pe_y, c_up, .{ .routes = RX_S_TX_W });
-                        } else {
-                            // Other columns
-                            @set_color_config(pe_x, pe_y, c_up, .{ .routes = RX_S_TX_N });
-                        }
-
-                    } else {
-
-                        // Upward routing
-                        if (is_parent) {
-                            // Father receive
-                            // Modifica a runtime (E -> S)
-                            @set_color_config(pe_x, pe_y, c_up, .{ 
-                                .routes = RX_E_TX_R,
-                                .switches = .{ 
-                                    .pos1 = .{ .rx = SOUTH, .tx = RAMP }, 
-                                    .ring_mode = true,
-                                    .pop_mode = .{ .pop_on_advance = true}
-                                }
-                            }); 
-                        } else if (is_first_col) {
-                            // First column, last row 
-                            @set_color_config(pe_x, pe_y, c_up, .{ .routes = RX_E_TX_N });
-                        } else {
-                            // Other columns
-                            @set_color_config(pe_x, pe_y, c_up, .{ .routes = RX_E_TX_W });
-                        }
-                    }
-
-                } else if (on_v_lane and local_y < b_dist_y[l]) {
-                    @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_N_TX_S });
-                    @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_S_TX_N });
-
-                } else if (on_h_lane and local_x < b_dist_x[l]) {
-                    @set_color_config(pe_x, pe_y, c_down, .{ .routes = RX_W_TX_E });
-                    @set_color_config(pe_x, pe_y, c_up,   .{ .routes = RX_E_TX_W });
-                }
-
-                is_vertical = !is_vertical;
-            }
-        }
-    }
+    const RX_N_TX_R  = .{ .rx = .{NORTH}, .tx = .{RAMP} };
+    const RX_W_TX_R  = .{ .rx = .{WEST} , .tx = .{RAMP} };
+    const RX_E_TX_R  = .{ .rx = .{EAST},  .tx = .{RAMP} };
+    const RX_S_TX_R  = .{ .rx = .{SOUTH}, .tx = .{RAMP} };
 
     for (@range(u16, grid_side)) |pe_y| {
         for (@range(u16, grid_side)) |pe_x| {

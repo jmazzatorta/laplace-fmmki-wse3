@@ -1,0 +1,65 @@
+// geometry.csl
+
+param prob_range : f32;
+param cells_per_side : u16;
+param morton_id : u32;
+param TREE_H : u16;
+
+fn get_indices_from_tag(tag: u16, dx: *i16, dy: *i16, dz: *i16) void {
+    const tag_i16: i16 = @as(i16, tag);
+    dx.* = (tag_i16 % 7) - 3;
+    dy.* = ((tag_i16 / 7) % 7) - 3;
+    dz.* = (tag_i16 / 49) - 3;
+}
+
+fn get_physical_distances(dx_idx: i16, dy_idx: i16, dz_idx: i16, box_size: f32, dist_x: *f32, dist_y: *f32, dist_z: *f32) void {
+    dist_x.* = @as(f32, dx_idx) * box_size;
+    dist_y.* = @as(f32, dy_idx) * box_size;
+    dist_z.* = @as(f32, dz_idx) * box_size;
+}
+
+// Translation vector from child center to parent center
+fn get_translation_vector(child_id: u32, comptime l: u16, out_vec: *[3]f32) void {
+    const child_cells_per_side = cells_per_side >> @as(u16, TREE_H - l - 1);
+    const half_child_size: f32 = prob_range / @as(f32, child_cells_per_side) * 0.5;
+
+    out_vec.*[0] = if (child_id & 1 == 0) half_child_size else -half_child_size;
+    out_vec.*[1] = if (child_id & 2 == 0) half_child_size else -half_child_size;
+    out_vec.*[2] = if (child_id & 4 == 0) half_child_size else -half_child_size;
+    
+}
+
+// Function to get lowest tree level on pe
+fn get_pe_min_level(morton : u32) u16 {
+    var level: u16 = TREE_H;
+    var m = morton;
+    while (m & 0x7 == 0 and level > 0) {
+        level -= 1;
+        m = m >> 3;
+    }
+    return level;
+}
+
+// Function to get the local 0-7 ID for a specific level
+fn get_level_id(morton : u32, l : u16) u32 {
+    const shift = (TREE_H - l) * 3;
+    return (morton >> shift) & 0x7;
+}
+
+// Decoding 2D
+fn morton_decode(m: u32, x: *u16, y: *u16) void {
+    x.* = 0;
+    y.* = 0;
+    for (@range(u16, 9)) |i| {
+        x.* |= @as(u16, (m >> (2 * i)) & 1) << i;
+        y.* |= @as(u16, (m >> (2 * i + 1)) & 1) << i;
+    }
+}
+
+fn get_child_morton(parent_morton: u32, child_level: u16, c_idx: u32) u32 {
+    return (parent_morton << 3) | (c_idx & 0x7);
+}
+
+fn get_parent_morton(child_morton: u32, current_level: u16) u32 {
+    return child_morton >> 3;
+}

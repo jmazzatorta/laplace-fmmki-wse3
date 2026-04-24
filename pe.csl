@@ -1,150 +1,19 @@
+// pe.csl
+
 param memcpy_params : comptime_struct;
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
-// Number of cells over one side of mesh (power of 2, max 64)
+// --- GLOBAL PARAMETERS ---
 param cells_per_side : u16;
-
-// Physical range of the domain 
 param prob_range : f32;
-
-// Max bodies on one PE
 param max_bodies_pe : u16;
-
-// Physical dimension of one cell
 param cell_size : f32;
 
-// Tree height
-const TREE_H : u8 = 6;
+// --- TOPOLOGY PARAMETERS ---
+param parity_x : u16;
+param parity_y : u16;
 
-// PE coordinates
-param pe_x;
-param pe_y;
-
-// Cell id and coordinates
-param morton_id : u32;
-param cell_x : u16;
-param cell_y : u16;
-param cell_z : u16;
-
-// Center coordinates [0,1)
-const center_x : f32 = ((@as(f32, cell_x) + 0.5) / @as(f32, cells_per_side)) * prob_range;
-const center_y : f32 = ((@as(f32, cell_y) + 0.5) / @as(f32, cells_per_side)) * prob_range;
-const center_z : f32 = ((@as(f32, cell_z) + 0.5) / @as(f32, cells_per_side)) * prob_range;
-
-// Translation vector from child center to parent center
-fn get_translation_vector(child_id: u32, comptime l: u8) [3]f32 {
-    const child_cells_per_side = cells_per_side >> @as(u16, TREE_H - l - 1);
-    const half_child_size: f32 = prob_range / @as(f32, child_cells_per_side) * 0.5;
-
-    const sx: f32 = if (child_id & 1 == 0) half_child_size else -half_child_size;
-    const sy: f32 = if (child_id & 2 == 0) half_child_size else -half_child_size;
-    const sz: f32 = if (child_id & 4 == 0) half_child_size else -half_child_size;
-    return [3]f32{ sx, sy, sz };
-}
-
-// Function to get lowest tree level on pe
-fn get_pe_min_level(morton : u32) u8 {
-    var level: u8 = 6;
-    var m = morton;
-    while (m & 0x7 == 0 and level > 0) {
-        level -= 1;
-        m = m >> 3;
-    }
-    return level;
-}
-const pe_min_level : u8 = get_pe_min_level(morton_id);
-
-// Function to get the local 0-7 ID for a specific level
-fn get_level_id(morton : u32, l : u8) u32 {
-    const shift = (TREE_H - l) * 3;
-    return (morton >> shift) & 0x7;
-}
-
-// Multipole constants (da hardcodare)
-param P : u16;
-param N_COEFFS : u16;
-const C_BUF_SIZE : u16 = N_COEFFS * 2;
-const N_COEFFS_V : u16 = (2*P+1) * (2*P+2) / 2;
-const C_BUF_M2L_SIZE : u16 = N_COEFFS_V * 2;
-
-// Global tracker level in which computation currently is
-// Handled by upward_phase() main function
-var L : u8;
-
-
-// --- TABLES ---
-
-const M2M_N_ENTRIES : u16 = 755;
-const M2L_N_ENTRIES : u16 = 3645;
-const N_BUCKETS     : u16 = N_COEFFS + 1;  // 46 (offsets array length)
-
-// M2M tables
-var m2m_offsets       = @zeros([N_BUCKETS]u16);
-var m2m_child_indices = @zeros([M2M_N_ENTRIES]u16);
-var m2m_v_indices     = @zeros([M2M_N_ENTRIES]u16);
-var m2m_sign_rr       = @zeros([M2M_N_ENTRIES]f32);
-var m2m_sign_ri       = @zeros([M2M_N_ENTRIES]f32);
-var m2m_sign_ir       = @zeros([M2M_N_ENTRIES]f32);
-var m2m_sign_ii       = @zeros([M2M_N_ENTRIES]f32);
-
-// M2L tables
-var m2l_offsets        = @zeros([N_BUCKETS]u16);
-var m2l_source_indices = @zeros([M2L_N_ENTRIES]u16);
-var m2l_v_indices      = @zeros([M2L_N_ENTRIES]u16);
-var m2l_sign_rr        = @zeros([M2L_N_ENTRIES]f32);
-var m2l_sign_ri        = @zeros([M2L_N_ENTRIES]f32);
-var m2l_sign_ir        = @zeros([M2L_N_ENTRIES]f32);
-var m2l_sign_ii        = @zeros([M2L_N_ENTRIES]f32);
-
-
-// --- AGENDAS ---
-
-const MAX_AGENDA : u16 = 189;
-
-var m2l_agenda_lvl2 = @zeros([MAX_AGENDA]u32);
-var m2l_agenda_lvl3 = @zeros([MAX_AGENDA]u32);
-var m2l_agenda_lvl4 = @zeros([MAX_AGENDA]u32);
-var m2l_agenda_lvl5 = @zeros([MAX_AGENDA]u32);
-
-var num_targets_lvl2 = @zeros([1]u32);
-var num_targets_lvl3 = @zeros([1]u32);
-var num_targets_lvl4 = @zeros([1]u32);
-var num_targets_lvl5 = @zeros([1]u32);
-
-
-// --- COLORS and FABRIC QUEUES ---
-
-// Colors upward phase
-param color_u1 : color; 
-param color_u2 : color; 
-param color_u3 : color;
-param color_u4 : color; 
-param color_u5 : color; 
-param color_u6 : color;
-
-const colors_up = [6]color{color_u1, color_u2, color_u3, color_u4, color_u5, color_u6};
-
-// Colors downward phase
-param color_d1 : color; 
-param color_d2 : color; 
-param color_d3 : color;
-param color_d4 : color; 
-param color_d5 : color; 
-param color_d6 : color;
-
-const colors_down = [6]color{color_d1, color_d2, color_d3, color_d4, color_d5, color_d6};
-
-// Queue bindings
-const iq = [6]input_queue{
-    @get_input_queue(2), @get_input_queue(3), @get_input_queue(4),
-    @get_input_queue(5), @get_input_queue(6), @get_input_queue(7),
-};
-const oq = [6]output_queue{
-    @get_output_queue(2), @get_output_queue(3), @get_output_queue(4),
-    @get_output_queue(5), @get_output_queue(6), @get_output_queue(7),
-};
-
-// Colors and queue bindings for free movements
+// --- COLORS ---
 param color_e1 : color; 
 param color_e2 : color; 
 param color_e3 : color;
@@ -153,533 +22,679 @@ param color_o1 : color;
 param color_o2 : color;
 param color_o3 : color;
 param color_o4 : color;
-const n_iq = @get_input_queue(8);
-const e_iq = @get_input_queue(9);
-const s_iq = @get_input_queue(10);
-const w_iq = @get_input_queue(11);
-const n_oq = @get_output_queue(8);
-const e_oq = @get_output_queue(9);
-const s_oq = @get_output_queue(10);
-const w_oq = @get_output_queue(11);
+
+// --- RUNTIME VARIABLES ---
+var pe_x: u16 = 0;
+var pe_y: u16 = 0;
+var morton_id: u32 = 0;
+var center_x: f32 = 0.0;
+var center_y: f32 = 0.0;
+var center_z: f32 = 0.0;
+var pe_min_level: u16 = 5;
 
 
-// --- BUFFERS ---
+// --- MODULES ---
 
-// Bodies buffer (host -> device)
-const b_buf_len : u16 = 2 + max_bodies_pe * 4;
-var bodies = @zeros([b_buf_len]u32); 
-var bodies_symbol : [*]u32 = &bodies;
-
-// Receive buffers (ping-pong)
-var rx_buf_1 = @zeros([C_BUF_SIZE]f32);
-var rx_buf_2 = @zeros([C_BUF_SIZE]f32);
-
-// Coefficients buffers
-var g_coeff_buf = @zeros([C_BUF_SIZE]f32);
-
-// Buffer for individual bodies contribution to spheric harmonic
-var contrib_buf = @zeros([C_BUF_SIZE]f32);
-
-// Communication token buffers
-var tx_token_buf = @zeros([1]u32);
-var rx_token_buf = @zeros([1]u32);
-
-// Temporary buffer for m2m phase
-var parent_buf = @zeros([C_BUF_SIZE]f32);
-
-// Translation vector solid harmonic coefficients
-var v_buf = @zeros([C_BUF_SIZE]f32);
-var v_buf_m2l = @zeros([C_BUF_M2L_SIZE]f32);
-
-// --- GLOBAL VARIABLES ---
-
-// Counters used by fathers to index child computing progression
-var n_processed : u16;
-var target_idx : u32;
-var target_list = [7]u32{1,4,5,2,3,6,7};
-
-// Use first buffer
-var use_first : bool = true; 
-
-
-// --- DSDs ---
-
-// Fabric DSDs generators 
-fn get_up_out_dsd(comptime l: u8, comptime extent : u16) fabout_dsd {
-    return @get_dsd(fabout_dsd, .{
-        .fabric_color = colors_up[l], 
-        .extent = extent, 
-        .output_queue = oq[l] 
-    });
-}
-fn get_up_in_dsd(comptime l: u8, comptime extent : u16) fabin_dsd {
-    return @get_dsd(fabin_dsd, .{ 
-        .fabric_color = colors_up[l], 
-        .extent = extent, 
-        .input_queue = iq[l] 
-    });
-}
-fn get_down_out_dsd(comptime l: u8, comptime extent : u16) fabout_dsd {
-    return @get_dsd(fabout_dsd, .{ 
-        .fabric_color = colors_down[l], 
-        .extent = extent, 
-        .output_queue = oq[l] 
-    });
-}
-fn get_down_in_dsd(comptime l: u8, comptime extent : u16) fabin_dsd {
-    return @get_dsd(fabin_dsd, .{ 
-        .fabric_color = colors_down[l], 
-        .extent = extent, 
-        .input_queue = iq[l] 
-    });
-}
-
-// Control wavelets DSD generators
-fn get_up_ctrl_out_dsd(comptime l: u8) fabout_dsd {
-    return @get_dsd(fabout_dsd, .{
-        .fabric_color = colors_up[l], 
-        .extent = 1,
-        .control = true,
-        .output_queue = oq[l]
-    });
-}
-
-// Data buffers DSDs
-const mem_rx_buf_1 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{C_BUF_SIZE} -> rx_buf_1[i] });
-const mem_rx_buf_2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{C_BUF_SIZE} -> rx_buf_2[i] });
-
-// Token DSDs
-const mem_tx_token = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_token_buf[i] });
-const mem_rx_token = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_token_buf[i] });
-
-// Coefficients DSD (send phase)
-const g_coeff_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{C_BUF_SIZE} -> g_coeff_buf[i] });
-
-// Contribution DSD (spherical harmonic)
-const contrib_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{C_BUF_SIZE} -> contrib_buf[i] });
-
-// Free movements DSDs (M2L)
-// Header DSDs
-const m2l_rx_header_east = @get_dsd(fabin_dsd, .{
-    .fabric_color = if (pe_x % 2 == 0) color_o1 else color_e1,
-    .extent = 1,
-    .input_queue = e_iq
-});
-const m2l_rx_header_west = @get_dsd(fabin_dsd, .{
-    .fabric_color = if (pe_x % 2 == 0) color_o3 else color_e3,
-    .extent = 1,
-    .input_queue = w_iq
-});
-const m2l_rx_header_north = @get_dsd(fabin_dsd, .{
-    .fabric_color = if (pe_y % 2 == 0) color_o2 else color_e2,
-    .extent = 1,
-    .input_queue = n_iq
-});
-const m2l_rx_header_south = @get_dsd(fabin_dsd, .{
-    .fabric_color = if (pe_y % 2 == 0) color_o4 else color_e4,
-    .extent = 1,
-    .input_queue = s_iq
+const cons = @import_module("constants.csl", .{
+    .cells_per_side = cells_per_side,
+    .prob_range = prob_range,
+    .max_bodies_pe = max_bodies_pe,
+    .cell_size = cell_size,
+    .color_e1 = color_e1, .color_e2 = color_e2, .color_e3 = color_e3, .color_e4 = color_e4,
+    .color_o1 = color_o1, .color_o2 = color_o2, .color_o3 = color_o3, .color_o4 = color_o4
 });
 
-// Payload DSDs
-const m2l_rx_payload_east = @get_dsd(fabin_dsd, .{
-    .fabric_color = if (pe_x % 2 == 0) color_o1 else color_e1,
-    .extent = 45,
-    .input_queue = e_iq
-});
-const m2l_rx_payload_west = @get_dsd(fabin_dsd, .{
-    .fabric_color = if (pe_x % 2 == 0) color_o3 else color_e3,
-    .extent = 45,
-    .input_queue = w_iq
-});
-const m2l_rx_payload_north = @get_dsd(fabin_dsd, .{
-    .fabric_color = if (pe_y % 2 == 0) color_o2 else color_e2,
-    .extent = 45,
-    .input_queue = n_iq
-});
-const m2l_rx_payload_south = @get_dsd(fabin_dsd, .{
-    .fabric_color = if (pe_y % 2 == 0) color_o4 else color_e4,
-    .extent = 45,
-    .input_queue = s_iq
+const geom = @import_module("geometry.csl", .{
+    .prob_range = prob_range,
+    .cells_per_side = cells_per_side,
+    .TREE_H = cons.TREE_H
 });
 
+const kernels = @import_module("kernels.csl", .{ .P = cons.P });
 
-// --- TASKS IDs ---
+// --- TABLES ---
+var m2m_offsets       = @zeros([cons.N_BUCKETS]u16);
+var m2m_child_indices = @zeros([cons.M2M_N_ENTRIES]u16);
+var m2m_v_indices     = @zeros([cons.M2M_N_ENTRIES]u16);
+var m2m_sign_rr       = @zeros([cons.M2M_N_ENTRIES]f32);
+var m2m_sign_ri       = @zeros([cons.M2M_N_ENTRIES]f32);
+var m2m_sign_ir       = @zeros([cons.M2M_N_ENTRIES]f32);
+var m2m_sign_ii       = @zeros([cons.M2M_N_ENTRIES]f32);
 
-// Task ID for m2m pipeline management
-const m2m_pipeline_task_id: local_task_id = @get_local_task_id(8);
+var m2l_offsets        = @zeros([cons.N_BUCKETS]u16);
+var m2l_source_indices = @zeros([cons.M2L_N_ENTRIES]u16);
+var m2l_v_indices      = @zeros([cons.M2L_N_ENTRIES]u16);
+var m2l_sign_rr        = @zeros([cons.M2L_N_ENTRIES]f32);
+var m2l_sign_ri        = @zeros([cons.M2L_N_ENTRIES]f32);
+var m2l_sign_ir        = @zeros([cons.M2L_N_ENTRIES]f32);
+var m2l_sign_ii        = @zeros([cons.M2L_N_ENTRIES]f32);
 
-// Task ID for m2m routing 
-const m2l_routing_task_id: local_task_id = @get_local_task_id(9);
+var l2l_offsets        = @zeros([cons.N_BUCKETS]u16);
+var l2l_source_indices = @zeros([cons.L2L_N_ENTRIES]u16);
+var l2l_v_indices      = @zeros([cons.L2L_N_ENTRIES]u16);
+var l2l_sign_rr        = @zeros([cons.L2L_N_ENTRIES]f32);
+var l2l_sign_ri        = @zeros([cons.L2L_N_ENTRIES]f32);
+var l2l_sign_ir        = @zeros([cons.L2L_N_ENTRIES]f32);
+var l2l_sign_ii        = @zeros([cons.L2L_N_ENTRIES]f32);
 
+// --- AGENDAS & COUNTERS ---
+var m2l_agenda_lvl2 = @zeros([cons.MAX_AGENDA]u32);
+var m2l_agenda_lvl3 = @zeros([cons.MAX_AGENDA]u32);
+var m2l_agenda_lvl4 = @zeros([cons.MAX_AGENDA]u32);
+var m2l_agenda_lvl5 = @zeros([cons.MAX_AGENDA]u32);
 
-// --- RUNTIME LAYOUT ---
+var num_targets_lvl2 = @zeros([1]u32);
+var num_targets_lvl3 = @zeros([1]u32);
+var num_targets_lvl4 = @zeros([1]u32);
+var num_targets_lvl5 = @zeros([1]u32);
 
-const ctrl = @import_module("<control>");
-const cw_advance = ctrl.encode_single_payload(
-    ctrl.opcode.SWITCH_ADV, true, @get_control_task_id(0), 0
-);
+var expected_rx_lvl2 = @zeros([1]u32);
+var expected_rx_lvl3 = @zeros([1]u32);
+var expected_rx_lvl4 = @zeros([1]u32);
+var expected_rx_lvl5 = @zeros([1]u32);
 
-var cw_buf = [1]u32{ cw_advance };
+// --- MEMORY BUFFERS ---
+var bodies = @zeros([cons.b_buf_len]u32);
+var v_buf = @zeros([cons.C_BUF_SIZE]f32);
+var v_buf_m2l = @zeros([cons.C_BUF_M2L_SIZE]f32);
 
-const mem_cw_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> cw_buf[i] });
+var m_coeff_buf_lvl2 = @zeros([cons.C_BUF_SIZE]f32);
+var m_coeff_buf_lvl3 = @zeros([cons.C_BUF_SIZE]f32);
+var m_coeff_buf_lvl4 = @zeros([cons.C_BUF_SIZE]f32);
+var m_coeff_buf_lvl5 = @zeros([cons.C_BUF_SIZE]f32);
 
+const m_coeff_dsd_lvl2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl2[i] });
+const m_coeff_dsd_lvl3 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl3[i] });
+const m_coeff_dsd_lvl4 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl4[i] });
+const m_coeff_dsd_lvl5 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl5[i] });
 
-// --- KERNELS MODULE ---
+var l_coeff_buf_lvl2 = @zeros([cons.C_BUF_SIZE]f32);
+var l_coeff_buf_lvl3 = @zeros([cons.C_BUF_SIZE]f32);
+var l_coeff_buf_lvl4 = @zeros([cons.C_BUF_SIZE]f32);
+var l_coeff_buf_lvl5 = @zeros([cons.C_BUF_SIZE]f32);
 
-const kernels = @import_module("kernels.csl", .{ .P = P });
+const l_coeff_dsd_lvl2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> l_coeff_buf_lvl2[i] });
+const l_coeff_dsd_lvl3 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> l_coeff_buf_lvl3[i] });
+const l_coeff_dsd_lvl4 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> l_coeff_buf_lvl4[i] });
 
+var g_coeff_buf = @zeros([cons.C_BUF_SIZE]f32);
+const g_coeff_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> g_coeff_buf[i] });
 
-//  --- COMMUNICATION PIPELINE MANAGEMENT FUNCTION ---
+var contrib_buf = @zeros([cons.C_BUF_SIZE]f32);
+const contrib_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> contrib_buf[i] });
 
-fn pipeline_step(comptime l: u8) void {
+// Universal Receive Buffer
+var rx_payload = @zeros([cons.C_BUF_SIZE]f32);
+const mem_rx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> rx_payload[i] });
 
-    const fab_in_data = get_up_in_dsd(l, C_BUF_SIZE);
-    const fab_out_token = get_down_out_dsd(l, 1);
+// Self-Routing Buffers
+var self_rx_hdr = @zeros([1]u32);
+var self_rx_payload = @zeros([cons.C_BUF_SIZE]f32);
+const mem_self_rx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> self_rx_payload[i] });
 
-    // Send request token
-    tx_token_buf[0] = target_list[target_idx];
-    @fmovs(fab_out_token, mem_tx_token);
+// State Counters
+var m2m_rx_counts = [4]u16{0, 0, 0, 0}; 
 
-    // Get current target (whose data just arrived)
-    const current_target = target_list[target_idx - 1]; 
+// M2L Yielding Sender State
+var current_m2l_level: u16 = 2; 
+var send_indices = [4]u16{0, 0, 0, 0};
 
-    // Calculate translation vector and its solid harmonic
-    const t_vec = get_translation_vector(current_target, L);
-    kernels.compute_solid_harmonics(t_vec[0], t_vec[1], t_vec[2], &v_buf);
-
-    if (use_first) {
-        @fmovs(mem_rx_buf_1, fab_in_data, .{ .async=true, .activate = m2m_pipeline_task_id });
-        kernels.m2m_translate(
-            &v_buf, 
-            &rx_buf_2,
-            &parent_buf,
-            &m2m_offsets, 
-            &m2m_child_indices, 
-            &m2m_v_indices,
-            &m2m_sign_rr, 
-            &m2m_sign_ri, 
-            &m2m_sign_ir, 
-            &m2m_sign_ii
-        );
-    } else {
-        @fmovs(mem_rx_buf_2, fab_in_data, .{ .async=true, .activate = m2m_pipeline_task_id });
-            kernels.m2m_translate(
-            &v_buf, 
-            &rx_buf_1,
-            &parent_buf,
-            &m2m_offsets, 
-            &m2m_child_indices, 
-            &m2m_v_indices,
-            &m2m_sign_rr, 
-            &m2m_sign_ri, 
-            &m2m_sign_ir, 
-            &m2m_sign_ii
-        );
-    }
-
-    n_processed += 1;
-    target_idx += 1;
-    use_first = !use_first;
+fn get_num_entries(lvl_idx: u16) u32 {
+    if (lvl_idx == 0) return num_targets_lvl2[0];
+    if (lvl_idx == 1) return num_targets_lvl3[0];
+    if (lvl_idx == 2) return num_targets_lvl4[0];
+    return num_targets_lvl5[0];
 }
 
-
-// --- PIPELINE LOCAL TASKS ---
-
-task m2m_pipeline_task() void {
-
-    if (n_processed == 7) {
-
-        // Calculate translation vector and its solid harmonic
-        const last_target = target_list[n_processed - 1];
-        const t_vec = get_translation_vector(last_target, L);
-        kernels.compute_solid_harmonics(t_vec[0], t_vec[1], t_vec[2], &v_buf);
-
-        // Translate last remaining child harmonic
-        if (use_first) {
-            kernels.m2m_translate(
-                &v_buf, 
-                &rx_buf_1,
-                &parent_buf,
-                &m2m_offsets, 
-                &m2m_child_indices, 
-                &m2m_v_indices,
-                &m2m_sign_rr, 
-                &m2m_sign_ri, 
-                &m2m_sign_ir, 
-                &m2m_sign_ii
-            );
-        } else {
-            kernels.m2m_translate(
-                &v_buf, 
-                &rx_buf_2,
-                &parent_buf,
-                &m2m_offsets, 
-                &m2m_child_indices, 
-                &m2m_v_indices,
-                &m2m_sign_rr, 
-                &m2m_sign_ri, 
-                &m2m_sign_ir, 
-                &m2m_sign_ii
-            );
-        }
-
-        // Update global coefficients for the next upward jump 
-        for (@range(u16, C_BUF_SIZE)) |i| {
-            g_coeff_buf[i] = parent_buf[i];
-        }
-
-        L -= 1;
-        if (L >= pe_min_level) {
-
-            if (L == 0) { upward_level(0); }
-            else if (L == 1) { upward_level(1); }
-            else if (L == 2) { upward_level(2); }
-            else if (L == 3) { upward_level(3); }
-            else if (L == 4) { upward_level(4); }
-            else if (L == 5) { upward_level(5); }
-
-        } else if (pe_min_level > 0) {
-
-            if (pe_min_level == 1) { send_to_parent(0); }
-            else if (pe_min_level == 2) { send_to_parent(1); }
-            else if (pe_min_level == 3) { send_to_parent(2); }
-            else if (pe_min_level == 4) { send_to_parent(3); }
-            else if (pe_min_level == 5) { send_to_parent(4); }
-            else if (pe_min_level == 6) { send_to_parent(5); }
-        }
-
-        return;
-    }
-
-    @block(m2m_pipeline_task_id);
-
-    // Runtime switch by control wavelet
-    if (n_processed == 3) {
-        if (L == 0) { @fmovs(get_up_ctrl_out_dsd(0), mem_cw_dsd); }
-        else if (L == 1) { @fmovs(get_up_ctrl_out_dsd(1), mem_cw_dsd); }
-        else if (L == 2) { @fmovs(get_up_ctrl_out_dsd(2), mem_cw_dsd); }
-        else if (L == 3) { @fmovs(get_up_ctrl_out_dsd(3), mem_cw_dsd); }
-        else if (L == 4) { @fmovs(get_up_ctrl_out_dsd(4), mem_cw_dsd); }
-        else if (L == 5) { @fmovs(get_up_ctrl_out_dsd(5), mem_cw_dsd); }
-    }
-
-    // Hardcoded block perchè compiler mi da fastidio
-    if (L == 0) { pipeline_step(0); }
-    else if (L == 1) { pipeline_step(1); }
-    else if (L == 2) { pipeline_step(2); }
-    else if (L == 3) { pipeline_step(3); }
-    else if (L == 4) { pipeline_step(4); }
-    else if (L == 5) { pipeline_step(5); }
-
-    @unblock(m2m_pipeline_task_id);
+fn get_target_info(lvl_idx: u16, index: u16) u32 {
+    if (lvl_idx == 0) return m2l_agenda_lvl2[index];
+    if (lvl_idx == 1) return m2l_agenda_lvl3[index];
+    if (lvl_idx == 2) return m2l_agenda_lvl4[index];
+    return m2l_agenda_lvl5[index];
 }
 
+// Results Buffer
+var forces_buf = @zeros([cons.max_bodies_pe * 4]f32);
 
-// --- M2L ROUTING TASK ---
+// --- NETWORK DSDs ---
+var tx_header_buf = @zeros([1]u32);
+const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
 
-task m2l_routing_task() void {
-    var header = @zeros([1]u32);
+var rx_hdr_e = @zeros([1]u32); var rx_hdr_w = @zeros([1]u32);
+var rx_hdr_n = @zeros([1]u32); var rx_hdr_s = @zeros([1]u32);
 
-}
+const mem_rx_hdr_e = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_e[i] });
+const mem_rx_hdr_w = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_w[i] });
+const mem_rx_hdr_n = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_n[i] });
+const mem_rx_hdr_s = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_s[i] });
 
+const c_e_out = if (parity_x == 0) cons.color_e1 else cons.color_o1;
+const c_w_out = if (parity_x == 0) cons.color_e3 else cons.color_o3;
+const c_n_out = if (parity_y == 0) cons.color_e2 else cons.color_o2;
+const c_s_out = if (parity_y == 0) cons.color_e4 else cons.color_o4;
 
-// --- UPWARD LEVEL FUNCTION  ---
+const c_e_in  = if (parity_x == 0) cons.color_o3 else cons.color_e3;
+const c_w_in  = if (parity_x == 0) cons.color_o1 else cons.color_e1;
+const c_n_in  = if (parity_y == 0) cons.color_o4 else cons.color_e4;
+const c_s_in  = if (parity_y == 0) cons.color_o2 else cons.color_e2;
 
-fn upward_level(comptime l: u8) void {
+const tx_hdr_e = @get_dsd(fabout_dsd, .{ .fabric_color = c_e_out, .extent = 1, .output_queue = cons.e_oq });
+const tx_hdr_w = @get_dsd(fabout_dsd, .{ .fabric_color = c_w_out, .extent = 1, .output_queue = cons.w_oq });
+const tx_hdr_n = @get_dsd(fabout_dsd, .{ .fabric_color = c_n_out, .extent = 1, .output_queue = cons.n_oq });
+const tx_hdr_s = @get_dsd(fabout_dsd, .{ .fabric_color = c_s_out, .extent = 1, .output_queue = cons.s_oq });
 
-    // Compute node ID on level l
-    const curr_level_id = get_level_id(morton_id, l);
+const tx_payload_e = @get_dsd(fabout_dsd, .{ .fabric_color = c_e_out, .extent = cons.C_BUF_SIZE, .output_queue = cons.e_oq });
+const tx_payload_w = @get_dsd(fabout_dsd, .{ .fabric_color = c_w_out, .extent = cons.C_BUF_SIZE, .output_queue = cons.w_oq });
+const tx_payload_n = @get_dsd(fabout_dsd, .{ .fabric_color = c_n_out, .extent = cons.C_BUF_SIZE, .output_queue = cons.n_oq });
+const tx_payload_s = @get_dsd(fabout_dsd, .{ .fabric_color = c_s_out, .extent = cons.C_BUF_SIZE, .output_queue = cons.s_oq });
 
-    // Reset parent buffer for aggregation
-    for (@range(u16, C_BUF_SIZE)) |i| {
-        parent_buf[i] = 0.0;
-    }
+const rx_fabin_hdr_e = @get_dsd(fabin_dsd, .{ .fabric_color = c_e_in, .extent = 1, .input_queue = cons.e_iq });
+const rx_fabin_hdr_w = @get_dsd(fabin_dsd, .{ .fabric_color = c_w_in, .extent = 1, .input_queue = cons.w_iq });
+const rx_fabin_hdr_n = @get_dsd(fabin_dsd, .{ .fabric_color = c_n_in, .extent = 1, .input_queue = cons.n_iq });
+const rx_fabin_hdr_s = @get_dsd(fabin_dsd, .{ .fabric_color = c_s_in, .extent = 1, .input_queue = cons.s_iq });
 
-    // Calculate translation vector and its solid harmonic
-    const t_vec = get_translation_vector(curr_level_id, l);
-    kernels.compute_solid_harmonics(t_vec[0], t_vec[1], t_vec[2], &v_buf);
-
-    // M2M local translation
-    kernels.m2m_translate(
-        &v_buf, 
-        &g_coeff_buf,
-        &parent_buf,
-        &m2m_offsets, 
-        &m2m_child_indices, 
-        &m2m_v_indices,
-        &m2m_sign_rr, 
-        &m2m_sign_ri, 
-        &m2m_sign_ir, 
-        &m2m_sign_ii
-    );
-
-    const fab_out_token = get_down_out_dsd(l, 1);
-    const fab_in_data = get_up_in_dsd(l, C_BUF_SIZE);
-
-    n_processed = 1;
-    target_idx = 1;
-    use_first = true; 
-
-    // Send first request token to child 010 
-    tx_token_buf[0] = target_list[0];
-    @fmovs(fab_out_token, mem_tx_token);
-    @fmovs(mem_rx_buf_1, fab_in_data, .{ .async =true, .activate = m2m_pipeline_task_id });
-}
-
-// --- SEND TO PARENT FUNCTION ---
-
-fn send_to_parent(comptime l: u8) void {
-
-    // Decode level inner id from morton id
-    const pe_level_id = get_level_id(morton_id, l + 1);
-
-    // Compute fabric DSDs 
-    const fab_in_token = get_down_in_dsd(l, 1);
-    const fab_out_data = get_up_out_dsd(l, C_BUF_SIZE);
-
-    // Active listening on father color
-    for (@range(u8, 7)) |_| {
-
-        // receive and consume token broadcast
-        @fmovs(mem_rx_token, fab_in_token);
-
-        // If token matches, send data
-        if (rx_token_buf[0] == pe_level_id) {
-            @fmovs(fab_out_data, g_coeff_dsd);
-        }
-    }
-}
-
-// --- FMM MAIN FUNCTION ---
-
-fn upward_phase() void {
-
-    // Calculate multipole from leaf level particles
-    compute_p2m();
-
-    if (pe_min_level <= 5) {
-
-        // Starts RECEIVE PHASE
-        // Compiler generates code for levels in which PE is father
-        // Iterates from bottom (level 5) to top (level 0) via TREE_H-1-cl
-        L = TREE_H - 1; 
-        if (L == 0) { upward_level(0); }
-        else if (L == 1) { upward_level(1); }
-        else if (L == 2) { upward_level(2); }
-        else if (L == 3) { upward_level(3); }
-        else if (L == 4) { upward_level(4); }
-        else if (L == 5) { upward_level(5); }
-
-    } else {
-
-        send_to_parent(pe_min_level - 1);
-
-    }
-}
+const rx_fabin_payload_e = @get_dsd(fabin_dsd, .{ .fabric_color = c_e_in, .extent = cons.C_BUF_SIZE, .input_queue = cons.e_iq });
+const rx_fabin_payload_w = @get_dsd(fabin_dsd, .{ .fabric_color = c_w_in, .extent = cons.C_BUF_SIZE, .input_queue = cons.w_iq });
+const rx_fabin_payload_n = @get_dsd(fabin_dsd, .{ .fabric_color = c_n_in, .extent = cons.C_BUF_SIZE, .input_queue = cons.n_iq });
+const rx_fabin_payload_s = @get_dsd(fabin_dsd, .{ .fabric_color = c_s_in, .extent = cons.C_BUF_SIZE, .input_queue = cons.s_iq });
 
 
-// --- COMPUTE FUNCTIONS ---
-
+// --- TRIGGER (P2M -> M2M) ---
 fn compute_p2m() void {
-    
-    // Clean coefficients buffer
-    for (@range(u16, C_BUF_SIZE)) |i| {
+    for (@range(u16, cons.C_BUF_SIZE)) |i| {
         g_coeff_buf[i] = 0.0;
     }
 
-    // Extract the count of the body from buffer
-    // const count : u16 = @as(u16, bodies[1]);
-    const count : u32 = bodies[1];
+    const count : u16 = @as(u16, bodies[1]);
     const bodies_offset : u16 = 2;
 
     for (@range(u16, count)) |b| {
-
         var i_b : u16 = bodies_offset + b * 4;
 
-        // Calculate bodies distances from the center of the cell 
         var dx : f32 = @bitcast(f32, bodies[i_b])     - center_x;
         var dy : f32 = @bitcast(f32, bodies[i_b + 1]) - center_y;
         var dz : f32 = @bitcast(f32, bodies[i_b + 2]) - center_z;
         var q  : f32 = @bitcast(f32, bodies[i_b + 3]);
 
-        // Compute contribution of body b to spheric harmonic
         kernels.compute_solid_harmonics(dx, dy, dz, &contrib_buf);
-
-        // Apply charge q to contribution_buff and apply to spherical harmonic
         @fmacs(g_coeff_dsd, g_coeff_dsd, contrib_dsd, q);
-        
     }
+}
+
+// --- ENTRY FUNCTION ---
+fn start_fmm() void {
+
+    morton_id = bodies[0];
+
+    pe_x = 0; pe_y = 0;
+    geom.morton_decode(morton_id, &pe_x, &pe_y);
+
+    var cell_x: u16 = 0; var cell_y: u16 = 0; var cell_z: u16 = 0;
+    for (@range(u16, 6)) |i| {
+        cell_x |= @as(u16, (morton_id >> (3 * i)) & 1) << i;
+        cell_y |= @as(u16, (morton_id >> (3 * i + 1)) & 1) << i;
+        cell_z |= @as(u16, (morton_id >> (3 * i + 2)) & 1) << i;
+    }
+    center_x = (@as(f32, cell_x) + 0.5) * cons.cell_size;
+    center_y = (@as(f32, cell_y) + 0.5) * cons.cell_size;
+    center_z = (@as(f32, cell_z) + 0.5) * cons.cell_size;
+
+    if (morton_id == 0) { pe_min_level = 0; }
+    else if ((morton_id & 0xFFF) == 0) { pe_min_level = 1; }
+    else if ((morton_id & 0x1FF) == 0) { pe_min_level = 2; }
+    else if ((morton_id & 0x3F) == 0) { pe_min_level = 3; }
+    else if ((morton_id & 0x7) == 0) { pe_min_level = 4; }
+
+    @fmovs(mem_rx_hdr_e, rx_fabin_hdr_e, .{ .async = true, .activate = cons.task_rx_east_id });
+    @fmovs(mem_rx_hdr_w, rx_fabin_hdr_w, .{ .async = true, .activate = cons.task_rx_west_id });
+    @fmovs(mem_rx_hdr_n, rx_fabin_hdr_n, .{ .async = true, .activate = cons.task_rx_north_id });
+    @fmovs(mem_rx_hdr_s, rx_fabin_hdr_s, .{ .async = true, .activate = cons.task_rx_south_id });
+
+    compute_p2m();
+
+    const parent_morton = geom.get_parent_morton(morton_id, 5);
+    var tgt_x: u16 = 0; var tgt_y: u16 = 0;
+    geom.morton_decode(parent_morton, &tgt_x, &tgt_y);
+
+    const my_child_id = geom.get_level_id(morton_id, 5);
+    const extra_data = (@as(u32, 5) << 8) | my_child_id;
+
+    send_packet(tgt_x, tgt_y, cons.MSG_M2M, extra_data, g_coeff_dsd);
+}
+
+
+// --- UNIVERSAL OUT ROUTER ---
+fn send_packet(tgt_x: u16, tgt_y: u16, msg_type: u32, extra_data: u32, payload_dsd: mem1d_dsd) void {
+    
+    tx_header_buf[0] = (@as(u32, tgt_x) << cons.SHIFT_TGT_X) |
+                       (@as(u32, tgt_y) << cons.SHIFT_TGT_Y) |
+                       (msg_type << cons.SHIFT_MSG_TYPE) |
+                       extra_data;
+
+    if (tgt_x != pe_x) {
+        if (tgt_x > pe_x) {
+            @fmovs(tx_hdr_e, mem_tx_header_dsd);
+            @fmovs(tx_payload_e, payload_dsd);
+        } else {
+            @fmovs(tx_hdr_w, mem_tx_header_dsd);
+            @fmovs(tx_payload_w, payload_dsd);
+        }
+    } else if (tgt_y != pe_y) {
+        if (tgt_y > pe_y) {
+            @fmovs(tx_hdr_s, mem_tx_header_dsd);
+            @fmovs(tx_payload_s, payload_dsd);
+        } else {
+            @fmovs(tx_hdr_n, mem_tx_header_dsd);
+            @fmovs(tx_payload_n, payload_dsd);
+        }
+    } else {
+        // Self-Routing
+        self_rx_hdr[0] = tx_header_buf[0];
+        @fmovs(mem_self_rx_payload_dsd, payload_dsd); 
+        @activate(cons.task_self_rx_id);
+    }
+}
+
+fn forward_packet(header: u32, in_payload: fabin_dsd) void {
+    const tgt_x = (header >> cons.SHIFT_TGT_X) & cons.MASK_9BIT;
+    const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
+
+    tx_header_buf[0] = header;
+
+    if (tgt_x != @as(u32, pe_x)) {
+        if (tgt_x > @as(u32, pe_x)) {
+            @fmovs(tx_hdr_e, mem_tx_header_dsd);
+            @fmovs(tx_payload_e, in_payload);
+        } else {
+            @fmovs(tx_hdr_w, mem_tx_header_dsd);
+            @fmovs(tx_payload_w, in_payload);
+        }
+    } else if (tgt_y != @as(u32, pe_y)) {
+        if (tgt_y > @as(u32, pe_y)) {
+            @fmovs(tx_hdr_s, mem_tx_header_dsd);
+            @fmovs(tx_payload_s, in_payload);
+        } else {
+            @fmovs(tx_hdr_n, mem_tx_header_dsd);
+            @fmovs(tx_payload_n, in_payload);
+        }
+    }  
+}
+
+// --- SELF CALL ---
+task self_rx() void {
+    @fmovs(mem_rx_payload_dsd, mem_self_rx_payload_dsd);
+    process_packet_local(self_rx_hdr[0]);
+}
+
+// --- CENTRAL SWITCHBOARD ---
+fn process_packet_local(header: u32) void {
+    const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+    const extra_data = header & cons.MASK_11BIT;
+
+    if (msg_type == @as(u32, cons.MSG_M2M)) {
+        process_m2m_local(extra_data);
+    } else if (msg_type == @as(u32, cons.MSG_M2L)) {
+        process_m2l_local(extra_data);
+    } else if (msg_type == @as(u32, cons.MSG_L2L)) {
+        process_l2l_local(extra_data);
+    }
+}
+
+
+// --- MATH KERNELS PROCESSORS ---
+
+fn process_m2m_local(extra_data: u32) void {
+    
+    const child_level: u16 = @as(u16, extra_data >> 8);
+    const child_idx: u32  = extra_data & 0xFF;
+
+    const my_level = child_level - 1;
+    var my_coeff_ptr: *[cons.C_BUF_SIZE]f32 = &m_coeff_buf_lvl5;
+    
+    if (my_level == 2) { my_coeff_ptr = &m_coeff_buf_lvl2; }
+    else if (my_level == 3) { my_coeff_ptr = &m_coeff_buf_lvl3; }
+    else if (my_level == 4) { my_coeff_ptr = &m_coeff_buf_lvl4; }
+    else if (my_level == 5) { my_coeff_ptr = &m_coeff_buf_lvl5; }
+    else { return; } 
+
+    var t_vec = @zeros([3]f32);
+    if (child_level == 3) { geom.get_translation_vector(child_idx, 3, &t_vec); }
+    else if (child_level == 4) { geom.get_translation_vector(child_idx, 4, &t_vec); }
+    else if (child_level == 5) { geom.get_translation_vector(child_idx, 5, &t_vec); }
+    else { return; }
+    
+    kernels.compute_solid_harmonics(t_vec[0], t_vec[1], t_vec[2], &v_buf);
+
+    kernels.m2m_translate(
+        &v_buf, 
+        &rx_payload, 
+        my_coeff_ptr,
+        &m2m_offsets, &m2m_child_indices, &m2m_v_indices,
+        &m2m_sign_rr, &m2m_sign_ri, &m2m_sign_ir, &m2m_sign_ii
+    );
+
+    const lvl_idx = my_level - 2;
+    m2m_rx_counts[lvl_idx] += 1;
+
+    // Trigger Upward Promozione
+    if (m2m_rx_counts[lvl_idx] == 8) {
+        
+        if (my_level > pe_min_level) {
+            const parent_morton = geom.get_parent_morton(morton_id, my_level);
+            var tgt_x: u16 = 0; var tgt_y: u16 = 0;
+            geom.morton_decode(parent_morton, &tgt_x, &tgt_y);
+
+            const my_child_id = geom.get_level_id(morton_id, my_level);
+            const new_extra_data = (@as(u32, my_level) << 8) | my_child_id;
+
+            if (my_level == 2) { send_packet(tgt_x, tgt_y, cons.MSG_M2M, new_extra_data, m_coeff_dsd_lvl2); }
+            else if (my_level == 3) { send_packet(tgt_x, tgt_y, cons.MSG_M2M, new_extra_data, m_coeff_dsd_lvl3); }
+            else if (my_level == 4) { send_packet(tgt_x, tgt_y, cons.MSG_M2M, new_extra_data, m_coeff_dsd_lvl4); }
+            else if (my_level == 5) { send_packet(tgt_x, tgt_y, cons.MSG_M2M, new_extra_data, m_coeff_dsd_lvl5); }
+        } else {
+            start_m2l_phase();
+        }
+    }
+}
+
+fn process_m2l_local(extra_data: u32) void {
+
+    // Decode 11-bit extra_data (2 bit level, 9 bit tag)
+    const level = @as(u16, (extra_data >> 9)) + 2;
+    const tag = @as(u16, extra_data & 0x1FF);
+
+    var l_coeff_ptr: *[cons.C_BUF_SIZE]f32 = &l_coeff_buf_lvl5;
+    if (level == 2) { 
+        l_coeff_ptr = &l_coeff_buf_lvl2; 
+        if (expected_rx_lvl2[0] > 0) expected_rx_lvl2[0] -= 1; 
+    }
+    else if (level == 3) { 
+        l_coeff_ptr = &l_coeff_buf_lvl3; 
+        if (expected_rx_lvl3[0] > 0) expected_rx_lvl3[0] -= 1; 
+    }
+    else if (level == 4) { 
+        l_coeff_ptr = &l_coeff_buf_lvl4; 
+        if (expected_rx_lvl4[0] > 0) expected_rx_lvl4[0] -= 1; 
+    }
+    else if (level == 5) { 
+        l_coeff_ptr = &l_coeff_buf_lvl5; 
+        if (expected_rx_lvl5[0] > 0) expected_rx_lvl5[0] -= 1; 
+    }
+    else return;
+
+    const tag_i16 = @as(i16, tag);
+    const dx_idx: i16 = (tag_i16 % 7) - 3;
+    const dy_idx: i16 = ((tag_i16 / 7) % 7) - 3;
+    const dz_idx: i16 = (tag_i16 / 49) - 3;
+    
+    const b_size: f32 = cons.box_size_at_level[level];
+    const dist_x: f32 = @as(f32, dx_idx) * b_size;
+    const dist_y: f32 = @as(f32, dy_idx) * b_size;
+    const dist_z: f32 = @as(f32, dz_idx) * b_size;
+
+    kernels.compute_solid_harmonics_2p(dist_x, dist_y, dist_z, &v_buf_m2l);
+
+    kernels.m2l_translate( &v_buf_m2l, &rx_payload, l_coeff_ptr,
+        &m2l_offsets, &m2l_source_indices, &m2l_v_indices, &m2l_sign_rr,
+        &m2l_sign_ri, &m2l_sign_ir, &m2l_sign_ii
+    );
+
+    check_m2l_completion();
+}
+
+fn process_l2l_local(extra_data: u32) void {
+    
+    const level: u16 = @as(u16, extra_data >> 8);
+    const child_idx: u32  = extra_data & 0xFF;
+
+    var l_coeff_ptr: *[cons.C_BUF_SIZE]f32 = &l_coeff_buf_lvl5;
+
+    if (level == 2) { l_coeff_ptr = &l_coeff_buf_lvl2; }
+    else if (level == 3) { l_coeff_ptr = &l_coeff_buf_lvl3; }
+    else if (level == 4) { l_coeff_ptr = &l_coeff_buf_lvl4; }
+    else if (level == 5) { l_coeff_ptr = &l_coeff_buf_lvl5; }
+    else { return; }
+
+    var t_vec = @zeros([3]f32);
+    if (level == 3) { geom.get_translation_vector(child_idx, 3, &t_vec); }
+    else if (level == 4) { geom.get_translation_vector(child_idx, 4, &t_vec); }
+    else if (level == 5) { geom.get_translation_vector(child_idx, 5, &t_vec); }
+    
+    const dx = -t_vec[0];
+    const dy = -t_vec[1];
+    const dz = -t_vec[2];
+
+    kernels.compute_solid_harmonics(dx, dy, dz, &v_buf);
+
+    kernels.l2l_translate( 
+        &v_buf, 
+        &rx_payload, 
+        l_coeff_ptr,
+        &l2l_offsets, &l2l_source_indices, &l2l_v_indices, 
+        &l2l_sign_rr, &l2l_sign_ri, &l2l_sign_ir, &l2l_sign_ii
+    );
+
+    if (level < 5) {
+        trigger_l2l_send(level); 
+    } else {
+        start_l2p_phase(); 
+    }
+}
+
+
+// --- M2L SENDER ---
+fn start_m2l_phase() void {
+    for (@range(u16, cons.C_BUF_SIZE)) |i| {
+        l_coeff_buf_lvl2[i] = 0.0;
+        l_coeff_buf_lvl3[i] = 0.0;
+        l_coeff_buf_lvl4[i] = 0.0;
+        l_coeff_buf_lvl5[i] = 0.0;
+    }
+
+    expected_rx_lvl2[0] = num_targets_lvl2[0];
+    expected_rx_lvl3[0] = num_targets_lvl3[0];
+    expected_rx_lvl4[0] = num_targets_lvl4[0];
+    expected_rx_lvl5[0] = num_targets_lvl5[0];
+
+    current_m2l_level = 2;
+    send_indices[0] = 0; send_indices[1] = 0; send_indices[2] = 0; send_indices[3] = 0;
+
+    if (get_num_entries(0) > 0 or get_num_entries(1) > 0 or get_num_entries(2) > 0 or get_num_entries(3) > 0) {
+        @activate(cons.m2l_send_task_id);
+    } else {
+        check_m2l_completion();
+    }
+}
+
+task m2l_send_task() void {
+    const chunk_size: u16 = 5;
+    var dispatched: u16 = 0;
+
+    while (dispatched < chunk_size) {
+        
+        if (current_m2l_level > 5) return;
+        const lvl_idx = current_m2l_level - 2;
+
+        if (@as(u32, send_indices[lvl_idx]) >= get_num_entries(lvl_idx)) {
+            current_m2l_level += 1;
+            continue;
+        }
+
+        const target_info = get_target_info(lvl_idx, send_indices[lvl_idx]);
+        
+        const tgt_x: u16 = @as(u16, (target_info >> 23) & 0x1FF);
+        const tgt_y: u16 = @as(u16, (target_info >> 14) & 0x1FF);
+        const tag: u16   = @as(u16, (target_info >> 3)  & 0x1FF);
+
+        const extra_data = ((@as(u32, current_m2l_level) - 2) << 9) | @as(u32, tag);
+
+        if (current_m2l_level == 2) { send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl2); }
+        else if (current_m2l_level == 3) { send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl3); }
+        else if (current_m2l_level == 4) { send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl4); }
+        else if (current_m2l_level == 5) { send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl5); }
+
+        send_indices[lvl_idx] += 1;
+        dispatched += 1;
+    }
+
+    if (current_m2l_level <= 5) {
+        @activate(cons.m2l_send_task_id);
+    }
+}
+
+fn check_m2l_completion() void {
+    const lvl2_done = (expected_rx_lvl2[0] == 0);
+    const lvl3_done = (expected_rx_lvl3[0] == 0);
+    const lvl4_done = (expected_rx_lvl4[0] == 0);
+    const lvl5_done = (expected_rx_lvl5[0] == 0);
+    if (lvl2_done and lvl3_done and lvl4_done and lvl5_done) {
+        start_l2l_phase(); 
+    }
+}
+
+
+// --- L2L SENDER ---
+fn start_l2l_phase() void {
+    if (pe_min_level <= 2) {
+        trigger_l2l_send(2); 
+    }
+}
+
+fn trigger_l2l_send(my_level: u16) void {
+    
+    const child_level = my_level + 1;
+
+    var my_l_coeff_dsd: mem1d_dsd = l_coeff_dsd_lvl2;
+    if (my_level == 2) { my_l_coeff_dsd = l_coeff_dsd_lvl2; }
+    else if (my_level == 3) { my_l_coeff_dsd = l_coeff_dsd_lvl3; }
+    else if (my_level == 4) { my_l_coeff_dsd = l_coeff_dsd_lvl4; }
+    else { return; }
+
+    for (@range(u32, 8)) |c_idx| {
+        
+        const child_morton = geom.get_child_morton(morton_id, child_level, c_idx);
+        
+        var tgt_x: u16 = 0; var tgt_y: u16 = 0;
+        geom.morton_decode(child_morton, &tgt_x, &tgt_y);
+
+        const extra_data = (@as(u32, child_level) << 8) | c_idx;
+
+        send_packet(tgt_x, tgt_y, cons.MSG_L2L, extra_data, my_l_coeff_dsd);
+    }
+}
+
+
+// --- L2P EVALUATION ---
+fn start_l2p_phase() void {
+    const count : u16 = @as(u16, bodies[1]);
+    const bodies_offset : u16 = 2;
+
+    for (@range(u16, count)) |b| {
+        var i_b : u16 = bodies_offset + b * 4;
+        
+        var dx : f32 = @bitcast(f32, bodies[i_b])     - center_x;
+        var dy : f32 = @bitcast(f32, bodies[i_b + 1]) - center_y;
+        var dz : f32 = @bitcast(f32, bodies[i_b + 2]) - center_z;
+
+        var pot: f32 = 0.0;
+        var fx: f32 = 0.0; var fy: f32 = 0.0; var fz: f32 = 0.0;
+
+        kernels.evaluate_l2p(dx, dy, dz, &l_coeff_buf_lvl5, &pot, &fx, &fy, &fz);
+
+        var f_idx: u16 = b * 4;
+        forces_buf[f_idx] = fx;
+        forces_buf[f_idx + 1] = fy;
+        forces_buf[f_idx + 2] = fz;
+        forces_buf[f_idx + 3] = pot;
+    }
+}
+
+
+// --- WORMHOLE RECEPTION TASKS ---
+task rx_east() void {
+    const header = rx_hdr_e[0];
+    const tgt_x = (header >> cons.SHIFT_TGT_X) & cons.MASK_9BIT;
+    const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
+
+    if (tgt_x == @as(u32, pe_x) and tgt_y == @as(u32, pe_y)) {
+        @fmovs(mem_rx_payload_dsd, rx_fabin_payload_e);
+        process_packet_local(header);
+    } else {
+        forward_packet(header, rx_fabin_payload_e);
+    }
+    @fmovs(mem_rx_hdr_e, rx_fabin_hdr_e, .{ .async = true, .activate = cons.task_rx_east_id });
+}
+task rx_west() void {
+    const header = rx_hdr_w[0];
+    const tgt_x = (header >> cons.SHIFT_TGT_X) & cons.MASK_9BIT;
+    const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
+
+    if (tgt_x == @as(u32, pe_x) and tgt_y == @as(u32, pe_y)) {
+        @fmovs(mem_rx_payload_dsd, rx_fabin_payload_w);
+        process_packet_local(header);
+    } else {
+        forward_packet(header, rx_fabin_payload_w);
+    }
+    @fmovs(mem_rx_hdr_w, rx_fabin_hdr_w, .{ .async = true, .activate = cons.task_rx_west_id });
+}
+task rx_north() void {
+    const header = rx_hdr_n[0];
+    const tgt_x = (header >> cons.SHIFT_TGT_X) & cons.MASK_9BIT;
+    const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
+
+    if (tgt_x == @as(u32, pe_x) and tgt_y == @as(u32, pe_y)) {
+        @fmovs(mem_rx_payload_dsd, rx_fabin_payload_n);
+        process_packet_local(header);
+    } else {
+        forward_packet(header, rx_fabin_payload_n);
+    }
+    @fmovs(mem_rx_hdr_n, rx_fabin_hdr_n, .{ .async = true, .activate = cons.task_rx_north_id });
+}
+task rx_south() void {
+    const header = rx_hdr_s[0];
+    const tgt_x = (header >> cons.SHIFT_TGT_X) & cons.MASK_9BIT;
+    const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
+
+    if (tgt_x == @as(u32, pe_x) and tgt_y == @as(u32, pe_y)) {
+        @fmovs(mem_rx_payload_dsd, rx_fabin_payload_s);
+        process_packet_local(header);
+    } else {
+        forward_packet(header, rx_fabin_payload_s);
+    }
+    @fmovs(mem_rx_hdr_s, rx_fabin_hdr_s, .{ .async = true, .activate = cons.task_rx_south_id });
 }
 
 
 // --- COMPTIME ---
-
 comptime {
+    // Input queues
+    @initialize_queue(cons.e_iq, .{ .color = c_e_in });
+    @initialize_queue(cons.w_iq, .{ .color = c_w_in });
+    @initialize_queue(cons.n_iq, .{ .color = c_n_in });
+    @initialize_queue(cons.s_iq, .{ .color = c_s_in });
 
-    // Initialize queues for levels in which PE is father
-    var l: u8 = pe_min_level;
-    while (l <= 5) {
-        @initialize_queue(iq[l], .{ .color = colors_up[l] });
-        @initialize_queue(oq[l], .{ .color = colors_down[l] });
-        l += 1;
-    }
+    // Output queues
+    @initialize_queue(cons.e_oq, .{ .color = c_e_out }); 
+    @initialize_queue(cons.w_oq, .{ .color = c_w_out }); 
+    @initialize_queue(cons.n_oq, .{ .color = c_n_out }); 
+    @initialize_queue(cons.s_oq, .{ .color = c_s_out }); 
 
-    // Initialize queues for level in which PE is not father 
-    if (pe_min_level > 0) {
-        const parent_lvl = pe_min_level - 1;
-        @initialize_queue(oq[parent_lvl], .{ .color = colors_up[parent_lvl] });
-        @initialize_queue(iq[parent_lvl], .{ .color = colors_down[parent_lvl] });
-    }
+    // Tasks binding
+    @bind_local_task(rx_east, cons.task_rx_east_id);
+    @bind_local_task(rx_west, cons.task_rx_west_id);
+    @bind_local_task(rx_north, cons.task_rx_north_id);
+    @bind_local_task(rx_south, cons.task_rx_south_id);
 
-    // Initialize queues for free movements
-    if (pe_x % 2 == 0) {
-        @initialize_queue(e_iq, .{ .color = color_o3 });
-        @initialize_queue(w_iq, .{ .color = color_o1 });
-    } else {
-        @initialize_queue(e_iq, .{ .color = color_e3 }); 
-        @initialize_queue(w_iq, .{ .color = color_e1 }); 
-    }
-    if (pe_y % 2 == 0) {
-        @initialize_queue(n_iq, .{ .color = color_o4 });
-        @initialize_queue(s_iq, .{ .color = color_o2 });
-    } else {
-        @initialize_queue(n_iq, .{ .color = color_e4 }); 
-        @initialize_queue(s_iq, .{ .color = color_e2 }); 
-    }
-
-    // Initialize output queues for free movements
-    if (pe_x % 2 == 0) {
-        @initialize_queue(e_oq, .{ .color = color_e1 }); 
-        @initialize_queue(w_oq, .{ .color = color_e3 }); 
-    } else {
-        @initialize_queue(e_oq, .{ .color = color_o1 }); 
-        @initialize_queue(w_oq, .{ .color = color_o3 }); 
-    }
-    
-    if (pe_y % 2 == 0) {
-        @initialize_queue(n_oq, .{ .color = color_e2 }); 
-        @initialize_queue(s_oq, .{ .color = color_e4 }); 
-    } else {
-        @initialize_queue(n_oq, .{ .color = color_o2 }); 
-        @initialize_queue(s_oq, .{ .color = color_o4 }); 
-    }
-
-    // Local tasks binding
-    @bind_local_task(m2m_pipeline_task, m2m_pipeline_task_id);
-    @bind_local_task(m2l_routing_task, m2l_routing_task_id);
-
+    @bind_local_task(self_rx, cons.task_self_rx_id);
+    @bind_local_task(m2l_send_task, cons.m2l_send_task_id);
 }
 
 layout {
+    @export_name("start_fmm", fn()void);
 
-    // Main function
-    @export_name("upward_phase", fn()void);
-
-    // Bodies
     @export_name("bodies", [*]u32);
 
-    // Math tables
+    // --- M2M TABLES ---
     @export_name("m2m_offsets",        [*]u16);
     @export_name("m2m_child_indices",  [*]u16);
     @export_name("m2m_v_indices",      [*]u16);
@@ -687,6 +702,8 @@ layout {
     @export_name("m2m_sign_ri",        [*]f32);
     @export_name("m2m_sign_ir",        [*]f32);
     @export_name("m2m_sign_ii",        [*]f32);
+
+    // --- M2L TABLES ---
     @export_name("m2l_offsets",        [*]u16);
     @export_name("m2l_source_indices", [*]u16);
     @export_name("m2l_v_indices",      [*]u16);
@@ -695,7 +712,16 @@ layout {
     @export_name("m2l_sign_ir",        [*]f32);
     @export_name("m2l_sign_ii",        [*]f32);
 
-    // M2L agendas
+    // --- L2L TABLES ---
+    @export_name("l2l_offsets",        [*]u16);
+    @export_name("l2l_source_indices", [*]u16);
+    @export_name("l2l_v_indices",      [*]u16);
+    @export_name("l2l_sign_rr",        [*]f32);
+    @export_name("l2l_sign_ri",        [*]f32);
+    @export_name("l2l_sign_ir",        [*]f32);
+    @export_name("l2l_sign_ii",        [*]f32);
+
+    // --- AGENDAS and COUNTERS ---
     @export_name("m2l_agenda_lvl2", [*]u32);
     @export_name("m2l_agenda_lvl3", [*]u32);
     @export_name("m2l_agenda_lvl4", [*]u32);
@@ -704,4 +730,12 @@ layout {
     @export_name("num_targets_lvl3", [*]u32);
     @export_name("num_targets_lvl4", [*]u32);
     @export_name("num_targets_lvl5", [*]u32);
+
+    @export_name("expected_rx_lvl2", [*]u32);
+    @export_name("expected_rx_lvl3", [*]u32);
+    @export_name("expected_rx_lvl4", [*]u32);
+    @export_name("expected_rx_lvl5", [*]u32);
+
+    // --- RESULTS ---
+    @export_name("forces_buf", [*]f32);
 }

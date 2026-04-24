@@ -2,21 +2,21 @@
 
 param P: u16; // 8
 
-pub const N_COEFFS: u16 = (P + 1) * (P + 2) / 2;      // 45
-pub const C_BUF_SIZE: u16 = N_COEFFS * 2;             // 90
+const N_COEFFS: u16 = (P + 1) * (P + 2) / 2;      // 45
+const C_BUF_SIZE: u16 = N_COEFFS * 2;             // 90
 
-pub const N_COEFFS_M2L: u16 = (2*P+1) * (2*P+2) / 2;  // 153 
-pub const C_BUF_M2L_SIZE: u16 = N_COEFFS_M2L * 2;     // 306
+const N_COEFFS_M2L: u16 = (2*P+1) * (2*P+2) / 2;  // 153 
+const C_BUF_M2L_SIZE: u16 = N_COEFFS_M2L * 2;     // 306
 
-pub const N_BUCKETS: u16 = N_COEFFS + 1;              // 46
+const N_BUCKETS: u16 = N_COEFFS + 1;              // 46
 
-pub const M2M_N_ENTRIES: u16 = 755;
-pub const M2L_N_ENTRIES: u16 = 3645;
-
+const M2M_N_ENTRIES: u16 = 755;
+const M2L_N_ENTRIES: u16 = 3645;
+const L2L_N_ENTRIES: u16 = 755;
 
 // --- Solid Harmonics Computation ---
 
-pub fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32) void {
+fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32) void {
 
     // Clean buffer
     for (@range(u16, C_BUF_SIZE)) |i| {
@@ -78,7 +78,7 @@ pub fn compute_solid_harmonics(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_SIZE]f32)
 
 // --- Solid Harmonics Computation ---
 
-pub fn compute_solid_harmonics_2p(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_M2L_SIZE]f32) void {
+fn compute_solid_harmonics_2p(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_M2L_SIZE]f32) void {
     for (@range(u16, C_BUF_M2L_SIZE)) |i| {
         buf.*[i] = 0.0;
     }
@@ -130,7 +130,7 @@ pub fn compute_solid_harmonics_2p(dx: f32, dy: f32, dz: f32, buf: *[C_BUF_M2L_SI
 
 // --- M2M Translation ---
 
-pub fn m2m_translate(
+fn m2m_translate(
     v_buf: *[C_BUF_SIZE]f32,
     child_buf: *[C_BUF_SIZE]f32,
     parent_buf: *[C_BUF_SIZE]f32,
@@ -149,25 +149,25 @@ pub fn m2m_translate(
         var accum_r: f32 = 0.0;
         var accum_i: f32 = 0.0;
 
-        const start_idx: u16 = offsets[f_idx];
-        const end_idx: u16 = offsets[f_idx + 1];
+        const start_idx: u16 = offsets.*[f_idx];
+        const end_idx: u16 = offsets.*[f_idx + 1];
 
         // Loop over sparse entries for this father coefficient
         for (@range(u16, start_idx, end_idx, 1)) |i| {
 
             // Read child coefficient (interleaved real, imag)
-            const ci: u16 = child_indices[i];
+            const ci: u16 = child_indices.*[i];
             const c_r: f32 = child_buf.*[ci];
             const c_i: f32 = child_buf.*[ci + 1];
 
             // Read translation harmonic V (interleaved real, imag)
-            const vi: u16 = v_indices[i];
+            const vi: u16 = v_indices.*[i];
             const v_r: f32 = v_buf.*[vi];
             const v_i: f32 = v_buf.*[vi + 1];
 
             // Complex multiplication with precomputed signs:
-            accum_r += sign_rr[i] * c_r * v_r + sign_ri[i] * c_i * v_i;
-            accum_i += sign_ir[i] * c_r * v_i + sign_ii[i] * c_i * v_r;
+            accum_r += sign_rr.*[i] * c_r * v_r + sign_ri.*[i] * c_i * v_i;
+            accum_i += sign_ir.*[i] * c_r * v_i + sign_ii.*[i] * c_i * v_r;
         }
 
         // Accumulate into parent buffer
@@ -180,7 +180,7 @@ pub fn m2m_translate(
 
 // --- M2L Translation ---
 
-pub fn m2l_translate(
+fn m2l_translate(
     v_buf: *[C_BUF_M2L_SIZE]f32,
     source_buf: *[C_BUF_SIZE]f32,
     target_buf: *[C_BUF_SIZE]f32,
@@ -199,25 +199,25 @@ pub fn m2l_translate(
         var accum_r: f32 = 0.0;
         var accum_i: f32 = 0.0;
 
-        const start_idx: u16 = offsets[t_idx];
-        const end_idx: u16 = offsets[t_idx + 1];
+        const start_idx: u16 = offsets.*[t_idx];
+        const end_idx: u16 = offsets.*[t_idx + 1];
 
         // Loop over sparse entries for this target coefficient
         for (@range(u16, start_idx, end_idx, 1)) |i| {
 
             // Read source coefficient (interleaved real, imag)
-            const si: u16 = source_indices[i];
+            const si: u16 = source_indices.*[i];
             const c_r: f32 = source_buf.*[si];
             const c_i: f32 = source_buf.*[si + 1];
 
             // Read translation harmonic V (interleaved real, imag)
-            const vi: u16 = v_indices[i];
+            const vi: u16 = v_indices.*[i];
             const v_r: f32 = v_buf.*[vi];
             const v_i: f32 = v_buf.*[vi + 1];
 
             // Complex multiplication with precomputed signs:
-            accum_r += sign_rr[i] * c_r * v_r + sign_ri[i] * c_i * v_i;
-            accum_i += sign_ir[i] * c_r * v_i + sign_ii[i] * c_i * v_r;
+            accum_r += sign_rr.*[i] * c_r * v_r + sign_ri.*[i] * c_i * v_i;
+            accum_i += sign_ir.*[i] * c_r * v_i + sign_ii.*[i] * c_i * v_r;
         }
 
         // Accumulate into target buffer
@@ -225,4 +225,83 @@ pub fn m2l_translate(
         target_buf.*[t_mem_idx] += accum_r;
         target_buf.*[t_mem_idx + 1] += accum_i;
     }
+}
+
+
+// --- L2L Translation ---
+
+fn l2l_translate(
+    v_buf: *[C_BUF_SIZE]f32,
+    parent_buf: *[C_BUF_SIZE]f32,
+    child_buf: *[C_BUF_SIZE]f32,
+    offsets: *[N_BUCKETS]u16,
+    source_indices: *[L2L_N_ENTRIES]u16,
+    v_indices: *[L2L_N_ENTRIES]u16,
+    sign_rr: *[L2L_N_ENTRIES]f32,
+    sign_ri: *[L2L_N_ENTRIES]f32,
+    sign_ir: *[L2L_N_ENTRIES]f32,
+    sign_ii: *[L2L_N_ENTRIES]f32
+) void {
+
+    for (@range(u16, N_COEFFS)) |c_idx| {
+
+        var accum_r: f32 = 0.0;
+        var accum_i: f32 = 0.0;
+
+        const start_idx: u16 = offsets.*[c_idx];
+        const end_idx: u16 = offsets.*[c_idx + 1];
+
+        for (@range(u16, start_idx, end_idx, 1)) |i| {
+
+            const pi: u16 = source_indices.*[i];
+            const p_r: f32 = parent_buf.*[pi];
+            const p_i: f32 = parent_buf.*[pi + 1];
+
+            const vi: u16 = v_indices.*[i];
+            const v_r: f32 = v_buf.*[vi];
+            const v_i: f32 = v_buf.*[vi + 1];
+
+            accum_r += sign_rr.*[i] * p_r * v_r + sign_ri.*[i] * p_i * v_i;
+            accum_i += sign_ir.*[i] * p_r * v_i + sign_ii.*[i] * p_i * v_r;
+        }
+
+        const c_mem_idx: u16 = c_idx * 2;
+        child_buf.*[c_mem_idx] += accum_r;
+        child_buf.*[c_mem_idx + 1] += accum_i;
+    }
+}
+
+
+// --- Local-to-Particle (L2P) Evaluation ---
+
+fn evaluate_l2p(
+    dx: f32, dy: f32, dz: f32,
+    l_coeffs: *[C_BUF_SIZE]f32,
+    pot: *f32, fx: *f32, fy: *f32, fz: *f32
+) void {
+    
+    var r_buf = @zeros([C_BUF_SIZE]f32);
+    compute_solid_harmonics(dx, dy, dz, &r_buf);
+
+    var p_acc: f32 = 0.0;
+
+    for (@range(u16, N_COEFFS)) |i| {
+        const idx = i * 2;
+        
+        const l_r = l_coeffs.*[idx];
+        const l_i = l_coeffs.*[idx + 1];
+        
+        const r_r = r_buf[idx];
+        const r_i = r_buf[idx + 1];
+
+        p_acc += (l_r * r_r - l_i * r_i);
+    }
+
+    pot.* = p_acc;
+
+    // TODO: Inserire il gradiente analitico -nabla(Phi) per ottenere i vettori di forza.
+    // Per ora, inizializzati a zero per permettere la compilazione e il dump dei dati.
+    fx.* = 0.0;
+    fy.* = 0.0;
+    fz.* = 0.0;
 }

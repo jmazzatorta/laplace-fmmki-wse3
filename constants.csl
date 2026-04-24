@@ -1,0 +1,101 @@
+// constants.csl
+
+// --- GLOBAL PARAMETERS ---
+param cells_per_side : u16;
+param prob_range : f32;
+param max_bodies_pe : u16;
+param cell_size : f32;
+
+param pe_x: u16;
+param pe_y: u16;
+
+param morton_id : u32;
+param cell_x : u16;
+param cell_y : u16;
+param cell_z : u16;
+
+// --- GEOMETRIC CONSTANTS --- 
+const TREE_H : u16 = 6;
+
+const center_x : f32 = ((@as(f32, cell_x) + 0.5) / @as(f32, cells_per_side)) * prob_range;
+const center_y : f32 = ((@as(f32, cell_y) + 0.5) / @as(f32, cells_per_side)) * prob_range;
+const center_z : f32 = ((@as(f32, cell_z) + 0.5) / @as(f32, cells_per_side)) * prob_range;
+
+const box_size_at_level = [6]f32{
+    prob_range,
+    prob_range / 2.0,
+    prob_range / 4.0,
+    prob_range / 8.0,
+    prob_range / 16.0,
+    prob_range / 32.0
+};
+
+// --- MULTIPOLE CONSTANTS ---
+const P: u16 = 8;
+const N_COEFFS : u16 = 45;
+const C_BUF_SIZE : u16 = N_COEFFS * 2; // 90
+const N_COEFFS_V : u16 = (2*P+1) * (2*P+2) / 2; // 153
+const C_BUF_M2L_SIZE : u16 = N_COEFFS_V * 2;    // 306
+
+const M2M_N_ENTRIES : u16 = 755;
+const M2L_N_ENTRIES : u16 = 3645;
+const L2L_N_ENTRIES: u16 = 755;
+
+const N_BUCKETS     : u16 = N_COEFFS + 1;  // 46
+
+const MAX_AGENDA : u16 = 189;
+const b_buf_len : u16 = 2 + max_bodies_pe * 4;
+
+// --- FREE ROUNTING COLORS ---
+param color_e1 : color; 
+param color_e2 : color; 
+param color_e3 : color;
+param color_e4 : color; 
+param color_o1 : color; 
+param color_o2 : color;
+param color_o3 : color;
+param color_o4 : color;
+
+// --- FREE ROUTING QUEUES ---
+const e_iq = @get_input_queue(2);
+const w_iq = @get_input_queue(3);
+const n_iq = @get_input_queue(4);
+const s_iq = @get_input_queue(5);
+
+const e_oq = @get_output_queue(2);
+const w_oq = @get_output_queue(3);
+const n_oq = @get_output_queue(4);
+const s_oq = @get_output_queue(5);
+
+// --- HEADERS ---
+// PROTOCOL HEADER (32 bit)
+// Bit 31-23: Target X (9 bit)
+// Bit 22-14: Target Y (9 bit)
+// Bit 13-11: Tipo Messaggio (3 bit)
+// Bit 10-0 : Payload / Tag / Livello (11 bit)
+
+const MSG_M2M : u16 = 1;
+const MSG_M2L : u16 = 2;
+const MSG_L2L : u16 = 3;
+
+const SHIFT_TGT_X : u16 = 23;
+const SHIFT_TGT_Y : u16 = 14;
+const SHIFT_MSG_TYPE : u16 = 11;
+
+const MASK_9BIT : u32 = 0x1FF;
+const MASK_3BIT : u32 = 0x7;
+const MASK_11BIT: u32 = 0x7FF;
+
+// --- TASKS IDs ---
+const task_rx_east_id:  local_task_id = @get_local_task_id(8);
+const task_rx_west_id:  local_task_id = @get_local_task_id(9);
+const task_rx_north_id: local_task_id = @get_local_task_id(10);
+const task_rx_south_id: local_task_id = @get_local_task_id(11); 
+
+const m2m_send_task_id: local_task_id = @get_local_task_id(12);
+const m2l_send_task_id: local_task_id = @get_local_task_id(13);
+const l2l_send_task_id: local_task_id = @get_local_task_id(14);
+
+const p2m_compute_task_id: local_task_id = @get_local_task_id(15);
+
+const task_self_rx_id: local_task_id = @get_local_task_id(16);
