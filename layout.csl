@@ -1,5 +1,5 @@
 // Number of cells over one side of mesh (power of 2, max 64)
-const cells_per_side : u16 = 64;
+const cells_per_side : u16 = 16;
 
 // Physical range of the domain 
 const prob_range     : f32 = 512.0;
@@ -15,13 +15,12 @@ param MEMCPY_D2H_ID : i16;
 const cell_size : f32 = prob_range / @as(f32, cells_per_side);
 
 // 2D mesh side length
-// cells_per_side=64 -> BITS=6, MORTON_BITS=18, grid_side=512
-const BITS : u16 = 6;
-const MORTON_BITS : u16 = 3 * BITS;
-const grid_side : u16 = @as(u16, 1) << ((MORTON_BITS + 1) / 2);
+const BITS : u16 = 4;                                        // log2(cells_per_side) = log2(16) = 4
+const MORTON_BITS : u16 = 3 * BITS;                          // 12
+const grid_side : u16 = @as(u16, 1) << ((MORTON_BITS + 1) / 2);   // 2^6 = 64
 
 // Multipole constants
-const P : u16 = 8;
+const P : u16 = 4;
 const N_COEFFS : u16 = (P + 1) * (P + 2) / 2;
 
 // Colors - Universal Wormhole Routing (Ping-Pong)
@@ -137,4 +136,49 @@ layout {
             }
         }
     }
+
+    @export_name("ptr_canarino", [*]u32, true);
+
+    @export_name("start_fmm", fn()void);
+
+    @export_name("ptr_bodies", [*]u32, true);
+    @export_name("ptr_forces_buf", [*]f32, true);
+    @export_name("ptr_fmm_done", [*]u32, true);
+
+    @export_name("ptr_m2m_offsets", [*]u16, true);
+    @export_name("ptr_m2m_child_indices", [*]u16, true);
+    @export_name("ptr_m2m_v_indices", [*]u16, true);
+    @export_name("ptr_m2m_sign_rr", [*]f32, true);
+    @export_name("ptr_m2m_sign_ri", [*]f32, true);
+    @export_name("ptr_m2m_sign_ir", [*]f32, true);
+    @export_name("ptr_m2m_sign_ii", [*]f32, true);
+
+    @export_name("ptr_m2l_offsets", [*]u16, true);
+    @export_name("ptr_m2l_source_indices", [*]u16, true);
+    @export_name("ptr_m2l_v_indices", [*]u16, true);
+    @export_name("ptr_m2l_sign_rr", [*]f32, true);
+    @export_name("ptr_m2l_sign_ri", [*]f32, true);
+    @export_name("ptr_m2l_sign_ir", [*]f32, true);
+    @export_name("ptr_m2l_sign_ii", [*]f32, true);
+
+    @export_name("ptr_l2l_offsets", [*]u16, true);
+    @export_name("ptr_l2l_source_indices", [*]u16, true);
+    @export_name("ptr_l2l_v_indices", [*]u16, true);
+    @export_name("ptr_l2l_sign_rr", [*]f32, true);
+    @export_name("ptr_l2l_sign_ri", [*]f32, true);
+    @export_name("ptr_l2l_sign_ir", [*]f32, true);
+    @export_name("ptr_l2l_sign_ii", [*]f32, true);
+
+    @export_name("ptr_m2l_agenda_lvl2", [*]u32, true);
+    @export_name("ptr_m2l_agenda_lvl3", [*]u32, true);
+    @export_name("ptr_m2l_agenda_lvl4", [*]u32, true);
+    @export_name("ptr_num_targets_lvl2", [*]u32, true);
+    @export_name("ptr_num_targets_lvl3", [*]u32, true);
+    @export_name("ptr_num_targets_lvl4", [*]u32, true);
+    @export_name("ptr_expected_rx_lvl2", [*]u32, true);
+    @export_name("ptr_expected_rx_lvl3", [*]u32, true);
+    @export_name("ptr_expected_rx_lvl4", [*]u32, true);
+
+    @export_name("ptr_p2p_agenda", [*]u32, true);
+    @export_name("ptr_num_p2p_neighbors", [*]u32, true);
 }

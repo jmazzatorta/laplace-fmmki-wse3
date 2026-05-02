@@ -12,7 +12,7 @@ from cerebras.sdk.runtime.sdkruntimepybind import (
 )
 
 N_BODIES       = 10_000
-DATA_FILE      = "fmm_full_data.pkl"
+DATA_FILE      = "tables/fmm_full_data.pkl"
 M2L_LEVELS     = [2, 3, 4, 5]       # Levels where M2L agendas exist
 MAX_AGENDA     = 189                # Max IL size across all levels/PEs
 FLOATS_PER_BODY = 4                 # (x, y, z, q)
@@ -161,9 +161,12 @@ def main():
     with open(f"{args.name}/out.json", encoding="utf-8") as f:
         compile_data = json.load(f)
 
-    cells_per_side = int(  compile_data["params"]["cells_per_side"])
-    prob_range     = float(compile_data["params"]["prob_range"])
-    max_bodies_pe  = int(  compile_data["params"]["max_bodies_pe"])
+    # cells_per_side = int(  compile_data["params"]["cells_per_side"])
+    cells_per_side = 16
+    # prob_range     = float(compile_data["params"]["prob_range"])
+    prob_range = 512
+    # max_bodies_pe  = int(  compile_data["params"]["max_bodies_pe"])
+    max_bodies_pe  = 5
 
     assert (cells_per_side & (cells_per_side - 1)) == 0, "cells_per_side must be pow2"
     assert cells_per_side <= 64, "cells_per_side max 64 (262K PE)"

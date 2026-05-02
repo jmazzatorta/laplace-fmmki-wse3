@@ -1,50 +1,45 @@
 // constants.csl
 
-// --- GLOBAL PARAMETERS ---
+// --- IMPORTED PARAMETERS ---
 param cells_per_side : u16;
 param prob_range : f32;
 param max_bodies_pe : u16;
 param cell_size : f32;
 
-param pe_x: u16;
-param pe_y: u16;
-
-param morton_id : u32;
-param cell_x : u16;
-param cell_y : u16;
-param cell_z : u16;
-
 // --- GEOMETRIC CONSTANTS --- 
-const TREE_H : u16 = 6;
+const TREE_H : u16 = 4;
 
-const center_x : f32 = ((@as(f32, cell_x) + 0.5) / @as(f32, cells_per_side)) * prob_range;
-const center_y : f32 = ((@as(f32, cell_y) + 0.5) / @as(f32, cells_per_side)) * prob_range;
-const center_z : f32 = ((@as(f32, cell_z) + 0.5) / @as(f32, cells_per_side)) * prob_range;
-
-const box_size_at_level = [6]f32{
-    prob_range,
-    prob_range / 2.0,
-    prob_range / 4.0,
-    prob_range / 8.0,
-    prob_range / 16.0,
-    prob_range / 32.0
+const box_size_at_level = [5]f32{
+    prob_range,             
+    prob_range / 2.0,      
+    prob_range / 4.0,     
+    prob_range / 8.0,    
+    prob_range / 16.0,  
 };
 
 // --- MULTIPOLE CONSTANTS ---
-const P: u16 = 8;
-const N_COEFFS : u16 = 45;
-const C_BUF_SIZE : u16 = N_COEFFS * 2; // 90
-const N_COEFFS_V : u16 = (2*P+1) * (2*P+2) / 2; // 153
-const C_BUF_M2L_SIZE : u16 = N_COEFFS_V * 2;    // 306
+const P: u16 = 4;
+const N_COEFFS : u16 = 15;
+const C_BUF_SIZE : u16 = N_COEFFS * 2;
+const N_COEFFS_V : u16 = (2*P+1) * (2*P+2) / 2;
+const C_BUF_M2L_SIZE : u16 = N_COEFFS_V * 2;
 
-const M2M_N_ENTRIES : u16 = 755;
-const M2L_N_ENTRIES : u16 = 3645;
-const L2L_N_ENTRIES: u16 = 755;
+const M2M_N_ENTRIES: u16 = 92;
+const M2L_N_ENTRIES: u16 = 376; // 375 + 1 per allineamento a 32bit
+const L2L_N_ENTRIES: u16 = 92;
 
-const N_BUCKETS     : u16 = N_COEFFS + 1;  // 46
+const N_BUCKETS     : u16 = N_COEFFS + 1;
 
 const MAX_AGENDA : u16 = 189;
 const b_buf_len : u16 = 2 + max_bodies_pe * 4;
+
+const MAX_P2P_NEIGHBORS: u16 = 26;
+const P2P_PAYLOAD_SIZE: u16 = 4 * max_bodies_pe;
+
+// --- FIFO CONSTANTS ---
+const FIFO_DEPTH: u16 = 32;
+const MAX_PAYLOAD: u16 = if (C_BUF_SIZE > P2P_PAYLOAD_SIZE) C_BUF_SIZE 
+                         else P2P_PAYLOAD_SIZE;
 
 // --- FREE ROUNTING COLORS ---
 param color_e1 : color; 
@@ -77,6 +72,7 @@ const s_oq = @get_output_queue(5);
 const MSG_M2M : u16 = 1;
 const MSG_M2L : u16 = 2;
 const MSG_L2L : u16 = 3;
+const MSG_P2P : u16 = 4;
 
 const SHIFT_TGT_X : u16 = 23;
 const SHIFT_TGT_Y : u16 = 14;
@@ -99,3 +95,5 @@ const l2l_send_task_id: local_task_id = @get_local_task_id(14);
 const p2m_compute_task_id: local_task_id = @get_local_task_id(15);
 
 const task_self_rx_id: local_task_id = @get_local_task_id(16);
+
+const process_fifo_task_id: local_task_id = @get_local_task_id(17);

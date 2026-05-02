@@ -4,12 +4,12 @@ import numpy as np
 import pickle
 import random
 
-P = 8
-N_COEFFS   = (P + 1) * (P + 2) // 2      # 45
-N_COEFFS_V = (2*P + 1) * (2*P + 2) // 2  # 153
+P = 4
+N_COEFFS   = (P + 1) * (P + 2) // 2
+N_COEFFS_V = (2*P + 1) * (2*P + 2) // 2
 
-cells_per_side = 64 
-TREE_H = 6 
+cells_per_side = 16 
+TREE_H = 4 
 grid_side = 512 
 
 def get_mem_idx(l, m):
@@ -194,7 +194,7 @@ def morton_decode_2d(morton_id):
 
 def morton_encode_3d(x, y, z):
     m = 0
-    for i in range(6):
+    for i in range(TREE_H):
         m |= (int(x >> i) & 1) << (3 * i)
         m |= (int(y >> i) & 1) << (3 * i + 1)
         m |= (int(z >> i) & 1) << (3 * i + 2)
@@ -202,17 +202,18 @@ def morton_encode_3d(x, y, z):
 
 def morton_decode_3d(morton_id):
     x, y, z = 0, 0, 0
-    for i in range(6):
+    for i in range(TREE_H):
         x |= ((morton_id >> (3 * i)) & 1) << i
         y |= ((morton_id >> (3 * i + 1)) & 1) << i
         z |= ((morton_id >> (3 * i + 2)) & 1) << i
     return x, y, z
 
 def is_pe_node_for_level(pe_x, pe_y, level):
-    b_dist_y = [512, 128, 64, 16, 8, 2]
-    b_dist_x = [512, 256, 64, 32, 8, 4]
-    if level >= len(b_dist_x): return False
-    return (pe_x % b_dist_x[level] == 0) and (pe_y % b_dist_y[level] == 0)
+    bits = 3 * (TREE_H - level)
+    if bits < 0: return False
+    stride_x = 1 << ((bits + 1) // 2)
+    stride_y = 1 << (bits // 2)
+    return (pe_x % stride_x == 0) and (pe_y % stride_y == 0)
 
 def get_spatial_tag(dx, dy, dz):
     tx, ty, tz = dx + 3, dy + 3, dz + 3
@@ -229,7 +230,7 @@ def pack_header(target_x, target_y, level, tag):
     """
     assert 0 <= target_x <= 511, f"Target X out of bounds: {target_x}"
     assert 0 <= target_y <= 511, f"Target Y out of bounds: {target_y}"
-    assert 2 <= level <= 5, f"Level out of bounds: {level}"
+    assert 2 <= level <= TREE_H, f"Level out of bounds: {level}"
     assert 0 <= tag <= 342, f"Tag out of bounds: {tag}"
 
     header = (target_x & 0x1FF) << 23
@@ -240,12 +241,12 @@ def pack_header(target_x, target_y, level, tag):
 
 def gen_routing_agendas():
     pe_schedules = {}
-    il_sizes = {2: [], 3: [], 4: [], 5: []}
+    il_sizes = {l: [] for l in range(2, TREE_H + 1)}
     debug_edges = set() 
     
-    for level in [2, 3, 4, 5]:
-        cells_per_box = 2**(6 - level)
-        grid_size_boxes = 64 // cells_per_box
+    for level in range(2, TREE_H + 1):
+        cells_per_box = 2**(TREE_H - level)
+        grid_size_boxes = cells_per_side // cells_per_box
         
         for box_x in range(grid_size_boxes):
             for box_y in range(grid_size_boxes):
@@ -297,6 +298,41 @@ def gen_routing_agendas():
 
     return pe_schedules, il_sizes, debug_edges
 
+def gen_p2p_agendas():
+    p2p_schedules = {}
+    
+    cells_per_box = 1
+    grid_size_boxes = cells_per_side  # = 16
+    
+    for cx in range(grid_size_boxes):
+        for cy in range(grid_size_boxes):
+            for cz in range(grid_size_boxes):
+                s_m3d = morton_encode_3d(cx, cy, cz)
+                s_pe_x, s_pe_y = morton_decode_2d(s_m3d)
+                
+                neighbors = []
+                for dx in [-1, 0, 1]:
+                    for dy in [-1, 0, 1]:
+                        for dz in [-1, 0, 1]:
+                            if dx == 0 and dy == 0 and dz == 0:
+                                continue  # skip self
+                            
+                            tx, ty, tz = cx + dx, cy + dy, cz + dz
+                            if not (0 <= tx < grid_size_boxes and
+                                    0 <= ty < grid_size_boxes and
+                                    0 <= tz < grid_size_boxes):
+                                continue  # out of bounds
+                            
+                            t_m3d = morton_encode_3d(tx, ty, tz)
+                            t_pe_x, t_pe_y = morton_decode_2d(t_m3d)
+                            
+                            head = (t_pe_x & 0x1FF) << 23 | (t_pe_y & 0x1FF) << 14
+                            neighbors.append(head)
+                
+                if neighbors:
+                    p2p_schedules[(s_pe_x, s_pe_y)] = np.array(neighbors, dtype=np.uint32)
+    return p2p_schedules
+
 def gen_binary_blob():
     print("Running Pipeline generator FMM...\n")
     
@@ -307,33 +343,45 @@ def gen_binary_blob():
     
     print("[2/3] Generating M2L agendas...")
     pe_schedules, il_sizes, debug_edges = gen_routing_agendas()
-    
+    p2p_schedules = gen_p2p_agendas()
+
     print("\n--- SANITY CHECKS ---")
-    for lvl in [2, 3, 4, 5]:
+    # Controllo dinamico sui livelli
+    for lvl in range(2, TREE_H + 1):
         sizes = il_sizes[lvl]
-        print(f"Level {lvl}: Max IL Size = {max(sizes)}, Avg = {sum(sizes)/len(sizes):.1f}")
-        if lvl >= 4:
+        # Previeni crash se un livello non ha agende valide (es. bordi estremi)
+        max_sz = max(sizes) if sizes else 0
+        avg_sz = (sum(sizes)/len(sizes)) if sizes else 0
+        print(f"Level {lvl}: Max IL Size = {max_sz}, Avg = {avg_sz:.1f}")
+        
+        # L'IL massima (189) si raggiunge con sicurezza dal livello 3 in poi
+        if lvl >= 3 and sizes:
             assert max(sizes) == 189, f"Error! Level {lvl} under 189 predicted iterations."
 
     sym_errors = 0
-    sample_edges = random.sample(list(debug_edges), min(100, len(debug_edges)))
+    # Gestione sicura del random sample se debug_edges è vuoto o piccolo
+    sample_size = min(100, len(debug_edges))
+    sample_edges = random.sample(list(debug_edges), sample_size) if sample_size > 0 else []
+    
     for lvl, src, tgt in sample_edges:
         if (lvl, tgt, src) not in debug_edges: 
             sym_errors += 1
-    print(f"Test Simmetria IL (100 random edges): {100 - sym_errors}% passati.")
-    assert sym_errors == 0, "Errore: La Interaction List NON è perfettamente simmetrica!"
+            
+    print(f"Test Simmetria IL ({sample_size} random edges): {100 - sym_errors}% passati.")
+    if sample_size > 0:
+        assert sym_errors == 0, "Errore: La Interaction List NON è perfettamente simmetrica!"
     
     print("\n[3/3] Binary Blob compression...")
     fmm_full_data = {
         "math": {
             "m2m": {
-                "offsets":       np.array(m2m_out[0], dtype=np.uint16),
-                "child_indices": np.array(m2m_out[1], dtype=np.uint16),
-                "v_indices":     np.array(m2m_out[2], dtype=np.uint16),
-                "sign_rr":       np.array(m2m_out[3], dtype=np.float32),
-                "sign_ri":       np.array(m2m_out[4], dtype=np.float32),
-                "sign_ir":       np.array(m2m_out[5], dtype=np.float32),
-                "sign_ii":       np.array(m2m_out[6], dtype=np.float32),
+                "offsets":        np.array(m2m_out[0], dtype=np.uint16),
+                "child_indices":  np.array(m2m_out[1], dtype=np.uint16),
+                "v_indices":      np.array(m2m_out[2], dtype=np.uint16),
+                "sign_rr":        np.array(m2m_out[3], dtype=np.float32),
+                "sign_ri":        np.array(m2m_out[4], dtype=np.float32),
+                "sign_ir":        np.array(m2m_out[5], dtype=np.float32),
+                "sign_ii":        np.array(m2m_out[6], dtype=np.float32),
             },
             "m2l": {
                 "offsets":        np.array(m2l_out[0], dtype=np.uint16),
@@ -355,7 +403,8 @@ def gen_binary_blob():
             }
         },
         "routing": {
-            "pe_schedules": pe_schedules
+            "pe_schedules": pe_schedules,
+            "p2p_schedules": p2p_schedules
         }
     }
 

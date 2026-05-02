@@ -1,5 +1,7 @@
 // pe.csl
 
+const simprint = @import_module("<simprint>");
+
 param memcpy_params : comptime_struct;
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
@@ -9,9 +11,11 @@ param prob_range : f32;
 param max_bodies_pe : u16;
 param cell_size : f32;
 
+
 // --- TOPOLOGY PARAMETERS ---
 param parity_x : u16;
 param parity_y : u16;
+
 
 // --- COLORS ---
 param color_e1 : color; 
@@ -23,6 +27,7 @@ param color_o2 : color;
 param color_o3 : color;
 param color_o4 : color;
 
+
 // --- RUNTIME VARIABLES ---
 var pe_x: u16 = 0;
 var pe_y: u16 = 0;
@@ -30,11 +35,10 @@ var morton_id: u32 = 0;
 var center_x: f32 = 0.0;
 var center_y: f32 = 0.0;
 var center_z: f32 = 0.0;
-var pe_min_level: u16 = 5;
+var pe_min_level: u16 = 4;
 
 
 // --- MODULES ---
-
 const cons = @import_module("constants.csl", .{
     .cells_per_side = cells_per_side,
     .prob_range = prob_range,
@@ -43,130 +47,143 @@ const cons = @import_module("constants.csl", .{
     .color_e1 = color_e1, .color_e2 = color_e2, .color_e3 = color_e3, .color_e4 = color_e4,
     .color_o1 = color_o1, .color_o2 = color_o2, .color_o3 = color_o3, .color_o4 = color_o4
 });
-
 const geom = @import_module("geometry.csl", .{
     .prob_range = prob_range,
     .cells_per_side = cells_per_side,
     .TREE_H = cons.TREE_H
 });
+const kernels = @import_module("kernels.csl", .{ 
+    .P = cons.P,
+    .M2M_N_ENTRIES = cons.M2M_N_ENTRIES,
+    .M2L_N_ENTRIES = cons.M2L_N_ENTRIES,
+    .L2L_N_ENTRIES = cons.L2L_N_ENTRIES,
+    .N_BUCKETS = cons.N_BUCKETS,
+    .P2P_PAYLOAD_SIZE = cons.P2P_PAYLOAD_SIZE
+});
 
-const kernels = @import_module("kernels.csl", .{ .P = cons.P });
 
 // --- TABLES ---
-var m2m_offsets       = @zeros([cons.N_BUCKETS]u16);
-var m2m_child_indices = @zeros([cons.M2M_N_ENTRIES]u16);
-var m2m_v_indices     = @zeros([cons.M2M_N_ENTRIES]u16);
-var m2m_sign_rr       = @zeros([cons.M2M_N_ENTRIES]f32);
-var m2m_sign_ri       = @zeros([cons.M2M_N_ENTRIES]f32);
-var m2m_sign_ir       = @zeros([cons.M2M_N_ENTRIES]f32);
-var m2m_sign_ii       = @zeros([cons.M2M_N_ENTRIES]f32);
+export var m2m_offsets       = @zeros([cons.N_BUCKETS]u16);
+export var m2m_child_indices = @zeros([cons.M2M_N_ENTRIES]u16);
+export var m2m_v_indices     = @zeros([cons.M2M_N_ENTRIES]u16);
+export var m2m_sign_rr       = @zeros([cons.M2M_N_ENTRIES]f32);
+export var m2m_sign_ri       = @zeros([cons.M2M_N_ENTRIES]f32);
+export var m2m_sign_ir       = @zeros([cons.M2M_N_ENTRIES]f32);
+export var m2m_sign_ii       = @zeros([cons.M2M_N_ENTRIES]f32);
 
-var m2l_offsets        = @zeros([cons.N_BUCKETS]u16);
-var m2l_source_indices = @zeros([cons.M2L_N_ENTRIES]u16);
-var m2l_v_indices      = @zeros([cons.M2L_N_ENTRIES]u16);
-var m2l_sign_rr        = @zeros([cons.M2L_N_ENTRIES]f32);
-var m2l_sign_ri        = @zeros([cons.M2L_N_ENTRIES]f32);
-var m2l_sign_ir        = @zeros([cons.M2L_N_ENTRIES]f32);
-var m2l_sign_ii        = @zeros([cons.M2L_N_ENTRIES]f32);
+export var m2l_offsets        = @zeros([cons.N_BUCKETS]u16);
+export var m2l_source_indices = @zeros([cons.M2L_N_ENTRIES]u16);
+export var m2l_v_indices      = @zeros([cons.M2L_N_ENTRIES]u16);
+export var m2l_sign_rr        = @zeros([cons.M2L_N_ENTRIES]f32);
+export var m2l_sign_ri        = @zeros([cons.M2L_N_ENTRIES]f32);
+export var m2l_sign_ir        = @zeros([cons.M2L_N_ENTRIES]f32);
+export var m2l_sign_ii        = @zeros([cons.M2L_N_ENTRIES]f32);
 
-var l2l_offsets        = @zeros([cons.N_BUCKETS]u16);
-var l2l_source_indices = @zeros([cons.L2L_N_ENTRIES]u16);
-var l2l_v_indices      = @zeros([cons.L2L_N_ENTRIES]u16);
-var l2l_sign_rr        = @zeros([cons.L2L_N_ENTRIES]f32);
-var l2l_sign_ri        = @zeros([cons.L2L_N_ENTRIES]f32);
-var l2l_sign_ir        = @zeros([cons.L2L_N_ENTRIES]f32);
-var l2l_sign_ii        = @zeros([cons.L2L_N_ENTRIES]f32);
+export var l2l_offsets        = @zeros([cons.N_BUCKETS]u16);
+export var l2l_source_indices = @zeros([cons.L2L_N_ENTRIES]u16);
+export var l2l_v_indices      = @zeros([cons.L2L_N_ENTRIES]u16);
+export var l2l_sign_rr        = @zeros([cons.L2L_N_ENTRIES]f32);
+export var l2l_sign_ri        = @zeros([cons.L2L_N_ENTRIES]f32);
+export var l2l_sign_ir        = @zeros([cons.L2L_N_ENTRIES]f32);
+export var l2l_sign_ii        = @zeros([cons.L2L_N_ENTRIES]f32);
 
 // --- AGENDAS & COUNTERS ---
-var m2l_agenda_lvl2 = @zeros([cons.MAX_AGENDA]u32);
-var m2l_agenda_lvl3 = @zeros([cons.MAX_AGENDA]u32);
-var m2l_agenda_lvl4 = @zeros([cons.MAX_AGENDA]u32);
-var m2l_agenda_lvl5 = @zeros([cons.MAX_AGENDA]u32);
+export var m2l_agenda_lvl2 = @zeros([cons.MAX_AGENDA]u32);
+export var m2l_agenda_lvl3 = @zeros([cons.MAX_AGENDA]u32);
+export var m2l_agenda_lvl4 = @zeros([cons.MAX_AGENDA]u32);
 
-var num_targets_lvl2 = @zeros([1]u32);
-var num_targets_lvl3 = @zeros([1]u32);
-var num_targets_lvl4 = @zeros([1]u32);
-var num_targets_lvl5 = @zeros([1]u32);
+export var num_targets_lvl2 = @zeros([1]u32);
+export var num_targets_lvl3 = @zeros([1]u32);
+export var num_targets_lvl4 = @zeros([1]u32);
 
 var expected_rx_lvl2 = @zeros([1]u32);
 var expected_rx_lvl3 = @zeros([1]u32);
 var expected_rx_lvl4 = @zeros([1]u32);
-var expected_rx_lvl5 = @zeros([1]u32);
+
+export var p2p_agenda = @zeros([cons.MAX_P2P_NEIGHBORS]u32);
+export var num_p2p_neighbors = @zeros([1]u32);
+
+var expected_rx_p2p = @zeros([1]u32);
 
 // --- MEMORY BUFFERS ---
-var bodies = @zeros([cons.b_buf_len]u32);
+export var bodies = @zeros([cons.b_buf_len]u32);
 var v_buf = @zeros([cons.C_BUF_SIZE]f32);
 var v_buf_m2l = @zeros([cons.C_BUF_M2L_SIZE]f32);
 
+var m_coeff_buf_lvl1 = @zeros([cons.C_BUF_SIZE]f32);
 var m_coeff_buf_lvl2 = @zeros([cons.C_BUF_SIZE]f32);
 var m_coeff_buf_lvl3 = @zeros([cons.C_BUF_SIZE]f32);
-var m_coeff_buf_lvl4 = @zeros([cons.C_BUF_SIZE]f32);
-var m_coeff_buf_lvl5 = @zeros([cons.C_BUF_SIZE]f32);
-
-const m_coeff_dsd_lvl2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl2[i] });
-const m_coeff_dsd_lvl3 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl3[i] });
-const m_coeff_dsd_lvl4 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl4[i] });
-const m_coeff_dsd_lvl5 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl5[i] });
 
 var l_coeff_buf_lvl2 = @zeros([cons.C_BUF_SIZE]f32);
 var l_coeff_buf_lvl3 = @zeros([cons.C_BUF_SIZE]f32);
 var l_coeff_buf_lvl4 = @zeros([cons.C_BUF_SIZE]f32);
-var l_coeff_buf_lvl5 = @zeros([cons.C_BUF_SIZE]f32);
-
-const l_coeff_dsd_lvl2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> l_coeff_buf_lvl2[i] });
-const l_coeff_dsd_lvl3 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> l_coeff_buf_lvl3[i] });
-const l_coeff_dsd_lvl4 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> l_coeff_buf_lvl4[i] });
 
 var g_coeff_buf = @zeros([cons.C_BUF_SIZE]f32);
-const g_coeff_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> g_coeff_buf[i] });
 
 var contrib_buf = @zeros([cons.C_BUF_SIZE]f32);
-const contrib_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> contrib_buf[i] });
 
 // Universal Receive Buffer
 var rx_payload = @zeros([cons.C_BUF_SIZE]f32);
-const mem_rx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> rx_payload[i] });
 
 // Self-Routing Buffers
 var self_rx_hdr = @zeros([1]u32);
 var self_rx_payload = @zeros([cons.C_BUF_SIZE]f32);
-const mem_self_rx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> self_rx_payload[i] });
 
-// State Counters
+var p2p_tx_payload = @zeros([cons.P2P_PAYLOAD_SIZE]f32);
+var p2p_rx_payload = @zeros([cons.P2P_PAYLOAD_SIZE]f32);
+
+// M2M globals
 var m2m_rx_counts = [4]u16{0, 0, 0, 0}; 
 
-// M2L Yielding Sender State
+// M2L globals
 var current_m2l_level: u16 = 2; 
-var send_indices = [4]u16{0, 0, 0, 0};
+var send_indices = [3]u16{0, 0, 0};
+var m2l_tx_done: u16 = 0;
+var m2l_phase_done: u16 = 0;
+
+// L2L globals
+var l2l_msg_pending: u16 = 0;
+var l2l_pending_extra: u32 = 0;
+var l2l_pending_payload = @zeros([cons.C_BUF_SIZE]f32);
+
+// L2P globals
+var l2p_done: u16 = 0;
+
+// P2P globals
+var p2p_send_index: u16 = 0;
+var p2p_send_done: u16 = 0;
 
 fn get_num_entries(lvl_idx: u16) u32 {
     if (lvl_idx == 0) return num_targets_lvl2[0];
     if (lvl_idx == 1) return num_targets_lvl3[0];
-    if (lvl_idx == 2) return num_targets_lvl4[0];
-    return num_targets_lvl5[0];
+    return num_targets_lvl4[0];
 }
 
 fn get_target_info(lvl_idx: u16, index: u16) u32 {
     if (lvl_idx == 0) return m2l_agenda_lvl2[index];
     if (lvl_idx == 1) return m2l_agenda_lvl3[index];
-    if (lvl_idx == 2) return m2l_agenda_lvl4[index];
-    return m2l_agenda_lvl5[index];
+    return m2l_agenda_lvl4[index];
 }
 
-// Results Buffer
-var forces_buf = @zeros([cons.max_bodies_pe * 4]f32);
+
+// --- FIFO BUFFERS ---
+var fifo_headers = @zeros([cons.FIFO_DEPTH]u32);
+var fifo_payloads = @zeros([cons.FIFO_DEPTH * cons.MAX_PAYLOAD]f32);
+var fifo_head: u16 = 0;
+var fifo_tail: u16 = 0;
+var fifo_count: u16 = 0;
+
+
+// --- RESULTS BUFFERS ---
+export var forces_buf = @zeros([cons.max_bodies_pe * 4]f32);
+export var fmm_done = @zeros([1]u32);
+
 
 // --- NETWORK DSDs ---
 var tx_header_buf = @zeros([1]u32);
-const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
 
 var rx_hdr_e = @zeros([1]u32); var rx_hdr_w = @zeros([1]u32);
 var rx_hdr_n = @zeros([1]u32); var rx_hdr_s = @zeros([1]u32);
-
-const mem_rx_hdr_e = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_e[i] });
-const mem_rx_hdr_w = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_w[i] });
-const mem_rx_hdr_n = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_n[i] });
-const mem_rx_hdr_s = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_s[i] });
 
 const c_e_out = if (parity_x == 0) cons.color_e1 else cons.color_o1;
 const c_w_out = if (parity_x == 0) cons.color_e3 else cons.color_o3;
@@ -198,6 +215,16 @@ const rx_fabin_payload_w = @get_dsd(fabin_dsd, .{ .fabric_color = c_w_in, .exten
 const rx_fabin_payload_n = @get_dsd(fabin_dsd, .{ .fabric_color = c_n_in, .extent = cons.C_BUF_SIZE, .input_queue = cons.n_iq });
 const rx_fabin_payload_s = @get_dsd(fabin_dsd, .{ .fabric_color = c_s_in, .extent = cons.C_BUF_SIZE, .input_queue = cons.s_iq });
 
+const tx_p2p_payload_e = @get_dsd(fabout_dsd, .{ .fabric_color = c_e_out, .extent = cons.P2P_PAYLOAD_SIZE, .output_queue = cons.e_oq });
+const tx_p2p_payload_w = @get_dsd(fabout_dsd, .{ .fabric_color = c_w_out, .extent = cons.P2P_PAYLOAD_SIZE, .output_queue = cons.w_oq });
+const tx_p2p_payload_n = @get_dsd(fabout_dsd, .{ .fabric_color = c_n_out, .extent = cons.P2P_PAYLOAD_SIZE, .output_queue = cons.n_oq });
+const tx_p2p_payload_s = @get_dsd(fabout_dsd, .{ .fabric_color = c_s_out, .extent = cons.P2P_PAYLOAD_SIZE, .output_queue = cons.s_oq });
+
+const rx_p2p_payload_e = @get_dsd(fabin_dsd, .{ .fabric_color = c_e_in, .extent = cons.P2P_PAYLOAD_SIZE, .input_queue = cons.e_iq });
+const rx_p2p_payload_w = @get_dsd(fabin_dsd, .{ .fabric_color = c_w_in, .extent = cons.P2P_PAYLOAD_SIZE, .input_queue = cons.w_iq });
+const rx_p2p_payload_n = @get_dsd(fabin_dsd, .{ .fabric_color = c_n_in, .extent = cons.P2P_PAYLOAD_SIZE, .input_queue = cons.n_iq });
+const rx_p2p_payload_s = @get_dsd(fabin_dsd, .{ .fabric_color = c_s_in, .extent = cons.P2P_PAYLOAD_SIZE, .input_queue = cons.s_iq });
+
 
 // --- TRIGGER (P2M -> M2M) ---
 fn compute_p2m() void {
@@ -206,6 +233,9 @@ fn compute_p2m() void {
     }
 
     const count : u16 = @as(u16, bodies[1]);
+
+    // TODO If count == 0, skip
+
     const bodies_offset : u16 = 2;
 
     for (@range(u16, count)) |b| {
@@ -217,12 +247,26 @@ fn compute_p2m() void {
         var q  : f32 = @bitcast(f32, bodies[i_b + 3]);
 
         kernels.compute_solid_harmonics(dx, dy, dz, &contrib_buf);
+
+        const g_coeff_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> g_coeff_buf[i] });
+        const contrib_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> contrib_buf[i] });
         @fmacs(g_coeff_dsd, g_coeff_dsd, contrib_dsd, q);
     }
 }
 
+// --- CANARY TEST ---
+export var canarino = @zeros([1]u32);
+export var ptr_canarino : [*]u32 = &canarino;
+export fn canary_start_fmm() void {
+    canarino[0] = 42;
+    sys_mod.unblock_cmd_stream();
+}
+
+
 // --- ENTRY FUNCTION ---
-fn start_fmm() void {
+export fn start_fmm() void {
+
+    simprint.fmt("({d},{d})STARTFMM.Min:{d}", .{pe_x, pe_y, pe_min_level});
 
     morton_id = bodies[0];
 
@@ -230,7 +274,7 @@ fn start_fmm() void {
     geom.morton_decode(morton_id, &pe_x, &pe_y);
 
     var cell_x: u16 = 0; var cell_y: u16 = 0; var cell_z: u16 = 0;
-    for (@range(u16, 6)) |i| {
+    for (@range(u16, cons.TREE_H)) |i| {
         cell_x |= @as(u16, (morton_id >> (3 * i)) & 1) << i;
         cell_y |= @as(u16, (morton_id >> (3 * i + 1)) & 1) << i;
         cell_z |= @as(u16, (morton_id >> (3 * i + 2)) & 1) << i;
@@ -239,27 +283,55 @@ fn start_fmm() void {
     center_y = (@as(f32, cell_y) + 0.5) * cons.cell_size;
     center_z = (@as(f32, cell_z) + 0.5) * cons.cell_size;
 
-    if (morton_id == 0) { pe_min_level = 0; }
-    else if ((morton_id & 0xFFF) == 0) { pe_min_level = 1; }
-    else if ((morton_id & 0x1FF) == 0) { pe_min_level = 2; }
-    else if ((morton_id & 0x3F) == 0) { pe_min_level = 3; }
-    else if ((morton_id & 0x7) == 0) { pe_min_level = 4; }
+    pe_min_level = geom.get_pe_min_level(morton_id);
 
+    if (pe_min_level < 2) {
+        pe_min_level = 2;
+    }
+
+    // TODO nella versione con più cicli pulire tutti i buffer qui
+    for (@range(u16, cons.max_bodies_pe * 4)) |i| {
+        forces_buf[i] = 0.0;
+    }
+
+    expected_rx_p2p[0] = num_p2p_neighbors[0];  
+    
+    const mem_rx_hdr_e = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_e[i] });
     @fmovs(mem_rx_hdr_e, rx_fabin_hdr_e, .{ .async = true, .activate = cons.task_rx_east_id });
+    const mem_rx_hdr_w = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_w[i] });
     @fmovs(mem_rx_hdr_w, rx_fabin_hdr_w, .{ .async = true, .activate = cons.task_rx_west_id });
+    const mem_rx_hdr_n = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_n[i] });
     @fmovs(mem_rx_hdr_n, rx_fabin_hdr_n, .{ .async = true, .activate = cons.task_rx_north_id });
+    const mem_rx_hdr_s = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_s[i] });
     @fmovs(mem_rx_hdr_s, rx_fabin_hdr_s, .{ .async = true, .activate = cons.task_rx_south_id });
 
     compute_p2m();
 
-    const parent_morton = geom.get_parent_morton(morton_id, 5);
+    simprint.fmt("({d},{d})PreSendM2M", .{pe_x, pe_y});
+
+    const parent_morton = geom.get_parent_morton(morton_id, 4);
     var tgt_x: u16 = 0; var tgt_y: u16 = 0;
     geom.morton_decode(parent_morton, &tgt_x, &tgt_y);
 
-    const my_child_id = geom.get_level_id(morton_id, 5);
-    const extra_data = (@as(u32, 5) << 8) | my_child_id;
+    const my_child_id = geom.get_level_id(morton_id, 4);
+    const extra_data = (@as(u32, 4) << 8) | my_child_id;
 
+    // Stagger sender by pe_x to avoid initial burst
+    const stagger_cycles: u16 = pe_x * 64;
+    var counter: u16 = 0;
+    while (counter < stagger_cycles) {
+        counter += 1;
+    }
+
+    const g_coeff_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> g_coeff_buf[i] });
     send_packet(tgt_x, tgt_y, cons.MSG_M2M, extra_data, g_coeff_dsd);
+
+    simprint.fmt("({d},{d})PostSendM2M", .{pe_x, pe_y});
+
+    if (pe_min_level == cons.TREE_H) {
+        start_m2l_phase();
+    }
+
 }
 
 
@@ -273,58 +345,126 @@ fn send_packet(tgt_x: u16, tgt_y: u16, msg_type: u32, extra_data: u32, payload_d
 
     if (tgt_x != pe_x) {
         if (tgt_x > pe_x) {
+            simprint.fmt("({d},{d})SP-E-T{d}", .{pe_x, pe_y, msg_type});
+            const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
             @fmovs(tx_hdr_e, mem_tx_header_dsd);
             @fmovs(tx_payload_e, payload_dsd);
         } else {
+            simprint.fmt("({d},{d})SP-W-T{d}", .{pe_x, pe_y, msg_type});
+            const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
             @fmovs(tx_hdr_w, mem_tx_header_dsd);
             @fmovs(tx_payload_w, payload_dsd);
         }
     } else if (tgt_y != pe_y) {
         if (tgt_y > pe_y) {
+            simprint.fmt("({d},{d})SP-S-T{d}", .{pe_x, pe_y, msg_type});
+            const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
             @fmovs(tx_hdr_s, mem_tx_header_dsd);
             @fmovs(tx_payload_s, payload_dsd);
         } else {
+            simprint.fmt("({d},{d})SP-N-T{d}", .{pe_x, pe_y, msg_type});
+            const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
             @fmovs(tx_hdr_n, mem_tx_header_dsd);
             @fmovs(tx_payload_n, payload_dsd);
         }
     } else {
-        // Self-Routing
+        simprint.fmt("({d},{d})SR-A", .{pe_x, pe_y});
         self_rx_hdr[0] = tx_header_buf[0];
+
+        simprint.fmt("({d},{d})SR-B", .{pe_x, pe_y});
+        const mem_self_rx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> self_rx_payload[i] });
         @fmovs(mem_self_rx_payload_dsd, payload_dsd); 
+
+        simprint.fmt("({d},{d})SR-C", .{pe_x, pe_y});
         @activate(cons.task_self_rx_id);
+
+        simprint.fmt("({d},{d})SR-D", .{pe_x, pe_y});
     }
 }
 
-fn forward_packet(header: u32, in_payload: fabin_dsd) void {
+fn forward_packet(header: u32, in_payload_default: fabin_dsd, in_payload_p2p: fabin_dsd) void {
     const tgt_x = (header >> cons.SHIFT_TGT_X) & cons.MASK_9BIT;
     const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
-
+    const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+    
     tx_header_buf[0] = header;
-
-    if (tgt_x != @as(u32, pe_x)) {
-        if (tgt_x > @as(u32, pe_x)) {
-            @fmovs(tx_hdr_e, mem_tx_header_dsd);
-            @fmovs(tx_payload_e, in_payload);
-        } else {
-            @fmovs(tx_hdr_w, mem_tx_header_dsd);
-            @fmovs(tx_payload_w, in_payload);
+    
+    if (msg_type == @as(u32, cons.MSG_P2P)) {
+        if (tgt_x != @as(u32, pe_x)) {
+            if (tgt_x > @as(u32, pe_x)) {
+                const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+                @fmovs(tx_hdr_e, mem_tx_header_dsd);
+                @fmovs(tx_p2p_payload_e, in_payload_p2p);
+            } else {
+                const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+                @fmovs(tx_hdr_w, mem_tx_header_dsd);
+                @fmovs(tx_p2p_payload_w, in_payload_p2p);
+            }
+        } else if (tgt_y != @as(u32, pe_y)) {
+            if (tgt_y > @as(u32, pe_y)) {
+                const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+                @fmovs(tx_hdr_s, mem_tx_header_dsd);
+                @fmovs(tx_p2p_payload_s, in_payload_p2p);
+            } else {
+                const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+                @fmovs(tx_hdr_n, mem_tx_header_dsd);
+                @fmovs(tx_p2p_payload_n, in_payload_p2p);
+            }
         }
-    } else if (tgt_y != @as(u32, pe_y)) {
-        if (tgt_y > @as(u32, pe_y)) {
-            @fmovs(tx_hdr_s, mem_tx_header_dsd);
-            @fmovs(tx_payload_s, in_payload);
-        } else {
-            @fmovs(tx_hdr_n, mem_tx_header_dsd);
-            @fmovs(tx_payload_n, in_payload);
+    } else {
+        if (tgt_x != @as(u32, pe_x)) {
+            if (tgt_x > @as(u32, pe_x)) {
+                const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+                @fmovs(tx_hdr_e, mem_tx_header_dsd);
+                @fmovs(tx_payload_e, in_payload_default); 
+            } else {
+                const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+                @fmovs(tx_hdr_w, mem_tx_header_dsd);
+                @fmovs(tx_payload_w, in_payload_default);
+            }
+        } else if (tgt_y != @as(u32, pe_y)) {
+            if (tgt_y > @as(u32, pe_y)) {
+                const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+                @fmovs(tx_hdr_s, mem_tx_header_dsd);
+                @fmovs(tx_payload_s, in_payload_default); 
+            } else {
+                const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+                @fmovs(tx_hdr_n, mem_tx_header_dsd);
+                @fmovs(tx_payload_n, in_payload_default); 
+            }
         }
-    }  
+    }
 }
 
 // --- SELF CALL ---
 task self_rx() void {
-    @fmovs(mem_rx_payload_dsd, mem_self_rx_payload_dsd);
-    process_packet_local(self_rx_hdr[0]);
+    simprint.fmt("({d},{d})SELFRX", .{pe_x, pe_y});
+    
+    const header = self_rx_hdr[0];
+    const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+    
+    fifo_headers[fifo_head] = header;
+    const base_idx = fifo_head * cons.MAX_PAYLOAD;
+
+    // 2. Copia i dati in RAM (nella FIFO) invece che processarli subito
+    if (msg_type == @as(u32, cons.MSG_P2P)) {
+        var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> fifo_payloads[i] });
+        dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+        const src_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> self_rx_payload[i] });
+        @fmovs(dest_dsd, src_dsd);
+    } else {
+        var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> fifo_payloads[i] });
+        dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+        const src_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> self_rx_payload[i] });
+        @fmovs(dest_dsd, src_dsd);
+    }
+    
+    // 3. Incrementa il contatore e avvia il task che fa la matematica
+    fifo_head = (fifo_head + 1) % cons.FIFO_DEPTH;
+    fifo_count += 1;
+    @activate(cons.process_fifo_task_id);
 }
+
 
 // --- CENTRAL SWITCHBOARD ---
 fn process_packet_local(header: u32) void {
@@ -337,49 +477,53 @@ fn process_packet_local(header: u32) void {
         process_m2l_local(extra_data);
     } else if (msg_type == @as(u32, cons.MSG_L2L)) {
         process_l2l_local(extra_data);
+    } else if (msg_type == @as(u32, cons.MSG_P2P)) {
+        process_p2p_local(extra_data);
     }
 }
 
 
 // --- MATH KERNELS PROCESSORS ---
-
 fn process_m2m_local(extra_data: u32) void {
     
     const child_level: u16 = @as(u16, extra_data >> 8);
     const child_idx: u32  = extra_data & 0xFF;
 
     const my_level = child_level - 1;
-    var my_coeff_ptr: *[cons.C_BUF_SIZE]f32 = &m_coeff_buf_lvl5;
+    const lvl_idx = my_level - 1;
+
+    simprint.fmt("({d},{d})RxM2M cl:{d} ml:{d} cnt:{d}", .{pe_x, pe_y, child_level, my_level, m2m_rx_counts[lvl_idx]});
+
+    if (my_level < 2) {
+        return;
+    }
+
+    var my_coeff_ptr: *[cons.C_BUF_SIZE]f32 = &m_coeff_buf_lvl3;
     
     if (my_level == 2) { my_coeff_ptr = &m_coeff_buf_lvl2; }
     else if (my_level == 3) { my_coeff_ptr = &m_coeff_buf_lvl3; }
-    else if (my_level == 4) { my_coeff_ptr = &m_coeff_buf_lvl4; }
-    else if (my_level == 5) { my_coeff_ptr = &m_coeff_buf_lvl5; }
     else { return; } 
 
     var t_vec = @zeros([3]f32);
     if (child_level == 3) { geom.get_translation_vector(child_idx, 3, &t_vec); }
     else if (child_level == 4) { geom.get_translation_vector(child_idx, 4, &t_vec); }
-    else if (child_level == 5) { geom.get_translation_vector(child_idx, 5, &t_vec); }
     else { return; }
     
     kernels.compute_solid_harmonics(t_vec[0], t_vec[1], t_vec[2], &v_buf);
 
     kernels.m2m_translate(
-        &v_buf, 
-        &rx_payload, 
-        my_coeff_ptr,
+        &v_buf, &rx_payload, my_coeff_ptr,
         &m2m_offsets, &m2m_child_indices, &m2m_v_indices,
         &m2m_sign_rr, &m2m_sign_ri, &m2m_sign_ir, &m2m_sign_ii
     );
 
-    const lvl_idx = my_level - 2;
     m2m_rx_counts[lvl_idx] += 1;
 
-    // Trigger Upward Promozione
     if (m2m_rx_counts[lvl_idx] == 8) {
         
-        if (my_level > pe_min_level) {
+        simprint.fmt("PE ({d},{d}) M2M 8/8 Lvl:{d} Min:{d}\n", .{pe_x, pe_y, my_level, pe_min_level});
+
+        if (my_level > 2) {
             const parent_morton = geom.get_parent_morton(morton_id, my_level);
             var tgt_x: u16 = 0; var tgt_y: u16 = 0;
             geom.morton_decode(parent_morton, &tgt_x, &tgt_y);
@@ -387,23 +531,26 @@ fn process_m2m_local(extra_data: u32) void {
             const my_child_id = geom.get_level_id(morton_id, my_level);
             const new_extra_data = (@as(u32, my_level) << 8) | my_child_id;
 
-            if (my_level == 2) { send_packet(tgt_x, tgt_y, cons.MSG_M2M, new_extra_data, m_coeff_dsd_lvl2); }
-            else if (my_level == 3) { send_packet(tgt_x, tgt_y, cons.MSG_M2M, new_extra_data, m_coeff_dsd_lvl3); }
-            else if (my_level == 4) { send_packet(tgt_x, tgt_y, cons.MSG_M2M, new_extra_data, m_coeff_dsd_lvl4); }
-            else if (my_level == 5) { send_packet(tgt_x, tgt_y, cons.MSG_M2M, new_extra_data, m_coeff_dsd_lvl5); }
-        } else {
+            if (my_level == 3) { 
+                const m_coeff_dsd_lvl3 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl3[i] });
+                send_packet(tgt_x, tgt_y, cons.MSG_M2M, new_extra_data, m_coeff_dsd_lvl3); 
+            }
+        }
+
+        if (my_level == pe_min_level) {
             start_m2l_phase();
         }
     }
 }
 
-fn process_m2l_local(extra_data: u32) void {
 
-    // Decode 11-bit extra_data (2 bit level, 9 bit tag)
+fn process_m2l_local(extra_data: u32) void {
     const level = @as(u16, (extra_data >> 9)) + 2;
     const tag = @as(u16, extra_data & 0x1FF);
 
-    var l_coeff_ptr: *[cons.C_BUF_SIZE]f32 = &l_coeff_buf_lvl5;
+    simprint.fmt("({d},{d})RxM2L L:{d} rem2:{d} rem3:{d} rem4:{d}", .{pe_x, pe_y, level, expected_rx_lvl2[0], expected_rx_lvl3[0], expected_rx_lvl4[0]});
+
+    var l_coeff_ptr: *[cons.C_BUF_SIZE]f32 = &l_coeff_buf_lvl4;
     if (level == 2) { 
         l_coeff_ptr = &l_coeff_buf_lvl2; 
         if (expected_rx_lvl2[0] > 0) expected_rx_lvl2[0] -= 1; 
@@ -415,10 +562,6 @@ fn process_m2l_local(extra_data: u32) void {
     else if (level == 4) { 
         l_coeff_ptr = &l_coeff_buf_lvl4; 
         if (expected_rx_lvl4[0] > 0) expected_rx_lvl4[0] -= 1; 
-    }
-    else if (level == 5) { 
-        l_coeff_ptr = &l_coeff_buf_lvl5; 
-        if (expected_rx_lvl5[0] > 0) expected_rx_lvl5[0] -= 1; 
     }
     else return;
 
@@ -434,47 +577,50 @@ fn process_m2l_local(extra_data: u32) void {
 
     kernels.compute_solid_harmonics_2p(dist_x, dist_y, dist_z, &v_buf_m2l);
 
-    kernels.m2l_translate( &v_buf_m2l, &rx_payload, l_coeff_ptr,
+    kernels.m2l_translate(&v_buf_m2l, &rx_payload, l_coeff_ptr,
         &m2l_offsets, &m2l_source_indices, &m2l_v_indices, &m2l_sign_rr,
-        &m2l_sign_ri, &m2l_sign_ir, &m2l_sign_ii
-    );
+        &m2l_sign_ri, &m2l_sign_ir, &m2l_sign_ii);
 
     check_m2l_completion();
 }
 
+
 fn process_l2l_local(extra_data: u32) void {
-    
+    if (m2l_phase_done == 0) {
+        l2l_msg_pending = 1;
+        l2l_pending_extra = extra_data;
+        const mem_rx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> rx_payload[i] });
+        const mem_l2l_pending_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> l2l_pending_payload[i] });
+        @fmovs(mem_l2l_pending_dsd, mem_rx_payload_dsd);
+    } else {
+        execute_l2l_math(extra_data, &rx_payload);
+    }
+}
+
+fn execute_l2l_math(extra_data: u32, payload_ptr: *[cons.C_BUF_SIZE]f32) void {
     const level: u16 = @as(u16, extra_data >> 8);
-    const child_idx: u32  = extra_data & 0xFF;
+    const child_idx: u32 = extra_data & 0xFF;
 
-    var l_coeff_ptr: *[cons.C_BUF_SIZE]f32 = &l_coeff_buf_lvl5;
-
-    if (level == 2) { l_coeff_ptr = &l_coeff_buf_lvl2; }
-    else if (level == 3) { l_coeff_ptr = &l_coeff_buf_lvl3; }
+    var l_coeff_ptr: *[cons.C_BUF_SIZE]f32 = &l_coeff_buf_lvl4;
+    if (level == 3) { l_coeff_ptr = &l_coeff_buf_lvl3; }
     else if (level == 4) { l_coeff_ptr = &l_coeff_buf_lvl4; }
-    else if (level == 5) { l_coeff_ptr = &l_coeff_buf_lvl5; }
     else { return; }
 
     var t_vec = @zeros([3]f32);
     if (level == 3) { geom.get_translation_vector(child_idx, 3, &t_vec); }
     else if (level == 4) { geom.get_translation_vector(child_idx, 4, &t_vec); }
-    else if (level == 5) { geom.get_translation_vector(child_idx, 5, &t_vec); }
-    
+
     const dx = -t_vec[0];
     const dy = -t_vec[1];
     const dz = -t_vec[2];
 
     kernels.compute_solid_harmonics(dx, dy, dz, &v_buf);
 
-    kernels.l2l_translate( 
-        &v_buf, 
-        &rx_payload, 
-        l_coeff_ptr,
-        &l2l_offsets, &l2l_source_indices, &l2l_v_indices, 
-        &l2l_sign_rr, &l2l_sign_ri, &l2l_sign_ir, &l2l_sign_ii
-    );
+    kernels.l2l_translate(&v_buf, payload_ptr, l_coeff_ptr,
+            &l2l_offsets, &l2l_source_indices, &l2l_v_indices, 
+            &l2l_sign_rr, &l2l_sign_ri, &l2l_sign_ir, &l2l_sign_ii);
 
-    if (level < 5) {
+    if (level < cons.TREE_H) {
         trigger_l2l_send(level); 
     } else {
         start_l2p_phase(); 
@@ -482,26 +628,59 @@ fn process_l2l_local(extra_data: u32) void {
 }
 
 
+fn process_p2p_local(extra_data: u32) void {
+    const remote_count: u16 = @as(u16, extra_data & 0xFFF);
+    
+    const local_count: u16 = @as(u16, bodies[1]);
+    const offset: u16 = 2;
+    
+    for (@range(u16, local_count)) |i| {
+        const i_b: u16 = offset + i * 4;
+        const tx: f32 = @bitcast(f32, bodies[i_b]);
+        const ty: f32 = @bitcast(f32, bodies[i_b + 1]);
+        const tz: f32 = @bitcast(f32, bodies[i_b + 2]);
+        
+        var fx: f32 = 0.0;
+        var fy: f32 = 0.0;
+        var fz: f32 = 0.0;
+        var pot: f32 = 0.0;
+        
+        kernels.evaluate_p2p(tx, ty, tz, &p2p_rx_payload, remote_count, &fx, &fy, &fz, &pot);
+        
+        // Per ora teniamo += poi vediamo quando si fa pipelining p2p
+
+        const f_idx: u16 = i * 4;
+        forces_buf[f_idx]     += fx;
+        forces_buf[f_idx + 1] += fy;
+        forces_buf[f_idx + 2] += fz;
+        forces_buf[f_idx + 3] += pot;
+    }
+    
+    if (expected_rx_p2p[0] > 0) expected_rx_p2p[0] -= 1;
+    
+    check_completion();
+}
+
+
 // --- M2L SENDER ---
 fn start_m2l_phase() void {
+
+    simprint.fmt("({d},{d})STARTM2L", .{pe_x, pe_y});
+
     for (@range(u16, cons.C_BUF_SIZE)) |i| {
         l_coeff_buf_lvl2[i] = 0.0;
         l_coeff_buf_lvl3[i] = 0.0;
         l_coeff_buf_lvl4[i] = 0.0;
-        l_coeff_buf_lvl5[i] = 0.0;
     }
 
-    expected_rx_lvl2[0] = num_targets_lvl2[0];
-    expected_rx_lvl3[0] = num_targets_lvl3[0];
-    expected_rx_lvl4[0] = num_targets_lvl4[0];
-    expected_rx_lvl5[0] = num_targets_lvl5[0];
-
     current_m2l_level = 2;
-    send_indices[0] = 0; send_indices[1] = 0; send_indices[2] = 0; send_indices[3] = 0;
+    send_indices[0] = 0; send_indices[1] = 0; send_indices[2] = 0;
+    m2l_tx_done = 0;
 
-    if (get_num_entries(0) > 0 or get_num_entries(1) > 0 or get_num_entries(2) > 0 or get_num_entries(3) > 0) {
+    if (get_num_entries(0) > 0 or get_num_entries(1) > 0 or get_num_entries(2) > 0) {
         @activate(cons.m2l_send_task_id);
     } else {
+        m2l_tx_done = 1;
         check_m2l_completion();
     }
 }
@@ -511,8 +690,13 @@ task m2l_send_task() void {
     var dispatched: u16 = 0;
 
     while (dispatched < chunk_size) {
+
+        if (current_m2l_level > cons.TREE_H) {
+            m2l_tx_done = 1;
+            check_m2l_completion();
+            return;
+        }
         
-        if (current_m2l_level > 5) return;
         const lvl_idx = current_m2l_level - 2;
 
         if (@as(u32, send_indices[lvl_idx]) >= get_num_entries(lvl_idx)) {
@@ -528,26 +712,45 @@ task m2l_send_task() void {
 
         const extra_data = ((@as(u32, current_m2l_level) - 2) << 9) | @as(u32, tag);
 
-        if (current_m2l_level == 2) { send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl2); }
-        else if (current_m2l_level == 3) { send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl3); }
-        else if (current_m2l_level == 4) { send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl4); }
-        else if (current_m2l_level == 5) { send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl5); }
+        if (current_m2l_level == 2) { 
+            const m_coeff_dsd_lvl2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl2[i] });
+            send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl2); 
+        } else if (current_m2l_level == 3) { 
+            const m_coeff_dsd_lvl3 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> m_coeff_buf_lvl3[i] });
+            send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, m_coeff_dsd_lvl3); 
+        } else if (current_m2l_level == 4) { 
+            const g_coeff_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> g_coeff_buf[i] });
+            send_packet(tgt_x, tgt_y, cons.MSG_M2L, extra_data, g_coeff_dsd); 
+        }
 
         send_indices[lvl_idx] += 1;
         dispatched += 1;
     }
 
-    if (current_m2l_level <= 5) {
+    if (current_m2l_level <= cons.TREE_H) {
         @activate(cons.m2l_send_task_id);
+    } else {
+        m2l_tx_done = 1;
+        check_m2l_completion();
     }
 }
 
+
 fn check_m2l_completion() void {
+
+
+    simprint.fmt("({d},{d})CheckM2L-{d},{d},{d}", .{pe_x, pe_y, expected_rx_lvl2[0], expected_rx_lvl3[0], expected_rx_lvl4[0]});
+
     const lvl2_done = (expected_rx_lvl2[0] == 0);
     const lvl3_done = (expected_rx_lvl3[0] == 0);
     const lvl4_done = (expected_rx_lvl4[0] == 0);
-    const lvl5_done = (expected_rx_lvl5[0] == 0);
-    if (lvl2_done and lvl3_done and lvl4_done and lvl5_done) {
+    
+    if (lvl2_done and lvl3_done and lvl4_done and m2l_tx_done == 1) {
+        m2l_phase_done = 1; 
+        if (l2l_msg_pending == 1) {
+            execute_l2l_math(l2l_pending_extra, &l2l_pending_payload);
+            l2l_msg_pending = 0;
+        }
         start_l2l_phase(); 
     }
 }
@@ -555,30 +758,32 @@ fn check_m2l_completion() void {
 
 // --- L2L SENDER ---
 fn start_l2l_phase() void {
+
+    simprint.fmt("({d},{d})STARTL2L", .{pe_x, pe_y});
+
     if (pe_min_level <= 2) {
         trigger_l2l_send(2); 
     }
 }
 
 fn trigger_l2l_send(my_level: u16) void {
-    
     const child_level = my_level + 1;
+
+    const l_coeff_dsd_lvl2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> l_coeff_buf_lvl2[i] });
+    const l_coeff_dsd_lvl3 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> l_coeff_buf_lvl3[i] });
 
     var my_l_coeff_dsd: mem1d_dsd = l_coeff_dsd_lvl2;
     if (my_level == 2) { my_l_coeff_dsd = l_coeff_dsd_lvl2; }
     else if (my_level == 3) { my_l_coeff_dsd = l_coeff_dsd_lvl3; }
-    else if (my_level == 4) { my_l_coeff_dsd = l_coeff_dsd_lvl4; }
     else { return; }
 
     for (@range(u32, 8)) |c_idx| {
-        
         const child_morton = geom.get_child_morton(morton_id, child_level, c_idx);
         
         var tgt_x: u16 = 0; var tgt_y: u16 = 0;
         geom.morton_decode(child_morton, &tgt_x, &tgt_y);
 
         const extra_data = (@as(u32, child_level) << 8) | c_idx;
-
         send_packet(tgt_x, tgt_y, cons.MSG_L2L, extra_data, my_l_coeff_dsd);
     }
 }
@@ -599,13 +804,125 @@ fn start_l2p_phase() void {
         var pot: f32 = 0.0;
         var fx: f32 = 0.0; var fy: f32 = 0.0; var fz: f32 = 0.0;
 
-        kernels.evaluate_l2p(dx, dy, dz, &l_coeff_buf_lvl5, &pot, &fx, &fy, &fz);
+        kernels.evaluate_l2p(dx, dy, dz, &l_coeff_buf_lvl4, &pot, &fx, &fy, &fz);
 
         var f_idx: u16 = b * 4;
-        forces_buf[f_idx] = fx;
-        forces_buf[f_idx + 1] = fy;
-        forces_buf[f_idx + 2] = fz;
-        forces_buf[f_idx + 3] = pot;
+        forces_buf[f_idx] += fx;
+        forces_buf[f_idx + 1] += fy;
+        forces_buf[f_idx + 2] += fz;
+        forces_buf[f_idx + 3] += pot;
+    }
+
+    l2p_done = 1;
+    start_p2p_phase();
+}
+
+
+// --- P2P EVALUATION ---
+fn start_p2p_phase() void {
+
+    simprint.fmt("({d},{d})STARTP2P", .{pe_x, pe_y});
+
+    const count: u32 = @as(u32, bodies[1]);
+
+    for (@range(u16, cons.P2P_PAYLOAD_SIZE)) |i| {
+        p2p_tx_payload[i] = 0.0;
+    }
+    
+    const offset: u16 = 2;
+    for (@range(u16, @as(u16,count))) |i| {
+        const i_b: u16 = offset + i * 4;
+        const o: u16 = i * 4;
+        p2p_tx_payload[o]     = @bitcast(f32, bodies[i_b]);
+        p2p_tx_payload[o + 1] = @bitcast(f32, bodies[i_b + 1]);
+        p2p_tx_payload[o + 2] = @bitcast(f32, bodies[i_b + 2]);
+        p2p_tx_payload[o + 3] = @bitcast(f32, bodies[i_b + 3]);
+    }
+    
+    for (@range(u32, num_p2p_neighbors[0])) |i| {
+        const target_info = p2p_agenda[i];
+        const tgt_x: u16 = @as(u16, (target_info >> 23) & 0x1FF);
+        const tgt_y: u16 = @as(u16, (target_info >> 14) & 0x1FF);
+        send_p2p_packet(tgt_x, tgt_y, count);
+    }
+    
+    compute_self_p2p();
+    check_completion();
+}
+
+fn compute_self_p2p() void {
+    const count: u16 = @as(u16, bodies[1]);
+    const offset: u16 = 2;
+    
+    for (@range(u16, count)) |i| {
+        const i_b: u16 = offset + i * 4;
+        const o: u16 = i * 4;
+        p2p_rx_payload[o]     = @bitcast(f32, bodies[i_b]);
+        p2p_rx_payload[o + 1] = @bitcast(f32, bodies[i_b + 1]);
+        p2p_rx_payload[o + 2] = @bitcast(f32, bodies[i_b + 2]);
+        p2p_rx_payload[o + 3] = @bitcast(f32, bodies[i_b + 3]);
+    }
+    
+    for (@range(u16, count)) |i| {
+        const i_b: u16 = offset + i * 4;
+        const tx: f32 = @bitcast(f32, bodies[i_b]);
+        const ty: f32 = @bitcast(f32, bodies[i_b + 1]);
+        const tz: f32 = @bitcast(f32, bodies[i_b + 2]);
+        
+        var fx: f32 = 0.0;
+        var fy: f32 = 0.0;
+        var fz: f32 = 0.0;
+        var pot: f32 = 0.0;
+        
+        kernels.evaluate_p2p(tx, ty, tz, &p2p_rx_payload, count, &fx, &fy, &fz, &pot);
+        
+        const f_idx: u16 = i * 4;
+        forces_buf[f_idx]     += fx;
+        forces_buf[f_idx + 1] += fy;
+        forces_buf[f_idx + 2] += fz;
+        forces_buf[f_idx + 3] += pot;
+    }
+}
+
+fn check_completion() void {
+    if (fmm_done[0] == 1) return;
+    if (l2p_done == 1 and expected_rx_p2p[0] == 0) {
+        simprint.fmt("({d},{d})FINESIMULAZIONE!", .{pe_x, pe_y});
+        fmm_done[0] = 1;
+        sys_mod.unblock_cmd_stream();
+    }
+}
+
+fn send_p2p_packet(tgt_x: u16, tgt_y: u16, count: u32) void {
+    tx_header_buf[0] = (@as(u32, tgt_x) << cons.SHIFT_TGT_X) |
+                   (@as(u32, tgt_y) << cons.SHIFT_TGT_Y) |
+                   (@as(u32, cons.MSG_P2P) << cons.SHIFT_MSG_TYPE) |
+                   (count & cons.MASK_11BIT);
+
+    if (tgt_x != pe_x) {
+        if (tgt_x > pe_x) {
+            const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+            @fmovs(tx_hdr_e, mem_tx_header_dsd);
+            const p2p_tx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> p2p_tx_payload[i] });
+            @fmovs(tx_p2p_payload_e, p2p_tx_payload_dsd);
+        } else {
+            const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+            @fmovs(tx_hdr_w, mem_tx_header_dsd);
+            const p2p_tx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> p2p_tx_payload[i] });
+            @fmovs(tx_p2p_payload_w, p2p_tx_payload_dsd);
+        }
+    } else if (tgt_y != pe_y) {
+        if (tgt_y > pe_y) {
+            const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+            @fmovs(tx_hdr_s, mem_tx_header_dsd);
+            const p2p_tx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> p2p_tx_payload[i] });
+            @fmovs(tx_p2p_payload_s, p2p_tx_payload_dsd);
+        } else {
+            const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf[i] });
+            @fmovs(tx_hdr_n, mem_tx_header_dsd);
+            const p2p_tx_payload_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> p2p_tx_payload[i] });
+            @fmovs(tx_p2p_payload_n, p2p_tx_payload_dsd);
+        }
     }
 }
 
@@ -617,52 +934,209 @@ task rx_east() void {
     const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
 
     if (tgt_x == @as(u32, pe_x) and tgt_y == @as(u32, pe_y)) {
-        @fmovs(mem_rx_payload_dsd, rx_fabin_payload_e);
-        process_packet_local(header);
+        const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+        
+        fifo_headers[fifo_head] = header;
+        const base_idx = fifo_head * cons.MAX_PAYLOAD;
+
+        if (msg_type == @as(u32, cons.MSG_P2P)) {
+            var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> fifo_payloads[i] });
+            dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            @fmovs(dest_dsd, rx_p2p_payload_e);
+        } else {
+            var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> fifo_payloads[i] });
+            dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            @fmovs(dest_dsd, rx_fabin_payload_e);
+        }
+
+        fifo_head = (fifo_head + 1) % cons.FIFO_DEPTH;
+        fifo_count += 1;
+        if (fifo_count >= cons.FIFO_DEPTH) { simprint.fmt("({d},{d})FIFOFULL", .{pe_x, pe_y}); }
+        @activate(cons.process_fifo_task_id);
     } else {
-        forward_packet(header, rx_fabin_payload_e);
+        forward_packet(header, rx_fabin_payload_e, rx_p2p_payload_e);
     }
+    
+    const mem_rx_hdr_e = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_e[i] });
     @fmovs(mem_rx_hdr_e, rx_fabin_hdr_e, .{ .async = true, .activate = cons.task_rx_east_id });
 }
+
 task rx_west() void {
     const header = rx_hdr_w[0];
     const tgt_x = (header >> cons.SHIFT_TGT_X) & cons.MASK_9BIT;
     const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
 
     if (tgt_x == @as(u32, pe_x) and tgt_y == @as(u32, pe_y)) {
-        @fmovs(mem_rx_payload_dsd, rx_fabin_payload_w);
-        process_packet_local(header);
+        const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+        
+        fifo_headers[fifo_head] = header;
+        const base_idx = fifo_head * cons.MAX_PAYLOAD;
+
+        if (msg_type == @as(u32, cons.MSG_P2P)) {
+            var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> fifo_payloads[i] });
+            dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            @fmovs(dest_dsd, rx_p2p_payload_w);
+        } else {
+            var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> fifo_payloads[i] });
+            dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            @fmovs(dest_dsd, rx_fabin_payload_w);
+        }
+
+        fifo_head = (fifo_head + 1) % cons.FIFO_DEPTH;
+        fifo_count += 1;
+        if (fifo_count >= cons.FIFO_DEPTH) { simprint.fmt("({d},{d})FIFOFULL", .{pe_x, pe_y}); }
+        @activate(cons.process_fifo_task_id);
     } else {
-        forward_packet(header, rx_fabin_payload_w);
+        forward_packet(header, rx_fabin_payload_w, rx_p2p_payload_w);
     }
+    const mem_rx_hdr_w = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_w[i] });
     @fmovs(mem_rx_hdr_w, rx_fabin_hdr_w, .{ .async = true, .activate = cons.task_rx_west_id });
 }
+
 task rx_north() void {
     const header = rx_hdr_n[0];
     const tgt_x = (header >> cons.SHIFT_TGT_X) & cons.MASK_9BIT;
     const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
 
     if (tgt_x == @as(u32, pe_x) and tgt_y == @as(u32, pe_y)) {
-        @fmovs(mem_rx_payload_dsd, rx_fabin_payload_n);
-        process_packet_local(header);
+        const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+        
+        fifo_headers[fifo_head] = header;
+        const base_idx = fifo_head * cons.MAX_PAYLOAD;
+
+        if (msg_type == @as(u32, cons.MSG_P2P)) {
+            var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> fifo_payloads[i] });
+            dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            @fmovs(dest_dsd, rx_p2p_payload_n);
+        } else {
+            var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> fifo_payloads[i] });
+            dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            @fmovs(dest_dsd, rx_fabin_payload_n);
+        }
+
+        fifo_head = (fifo_head + 1) % cons.FIFO_DEPTH;
+        fifo_count += 1;
+        if (fifo_count >= cons.FIFO_DEPTH) { simprint.fmt("({d},{d})FIFOFULL", .{pe_x, pe_y}); }
+        @activate(cons.process_fifo_task_id);
     } else {
-        forward_packet(header, rx_fabin_payload_n);
+        forward_packet(header, rx_fabin_payload_n, rx_p2p_payload_n);
     }
+    const mem_rx_hdr_n = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_n[i] });
     @fmovs(mem_rx_hdr_n, rx_fabin_hdr_n, .{ .async = true, .activate = cons.task_rx_north_id });
 }
+
 task rx_south() void {
     const header = rx_hdr_s[0];
     const tgt_x = (header >> cons.SHIFT_TGT_X) & cons.MASK_9BIT;
     const tgt_y = (header >> cons.SHIFT_TGT_Y) & cons.MASK_9BIT;
 
     if (tgt_x == @as(u32, pe_x) and tgt_y == @as(u32, pe_y)) {
-        @fmovs(mem_rx_payload_dsd, rx_fabin_payload_s);
-        process_packet_local(header);
+        const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+        
+        fifo_headers[fifo_head] = header;
+        const base_idx = fifo_head * cons.MAX_PAYLOAD;
+
+        if (msg_type == @as(u32, cons.MSG_P2P)) {
+            var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> fifo_payloads[i] });
+            dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            @fmovs(dest_dsd, rx_p2p_payload_s);
+        } else {
+            var dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> fifo_payloads[i] });
+            dest_dsd = @set_dsd_base_addr(dest_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            @fmovs(dest_dsd, rx_fabin_payload_s);
+        }
+
+        fifo_head = (fifo_head + 1) % cons.FIFO_DEPTH;
+        fifo_count += 1;
+        if (fifo_count >= cons.FIFO_DEPTH) { simprint.fmt("({d},{d})FIFOFULL", .{pe_x, pe_y}); }
+        @activate(cons.process_fifo_task_id);
     } else {
-        forward_packet(header, rx_fabin_payload_s);
+        forward_packet(header, rx_fabin_payload_s, rx_p2p_payload_s);
     }
+    const mem_rx_hdr_s = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> rx_hdr_s[i] });
     @fmovs(mem_rx_hdr_s, rx_fabin_hdr_s, .{ .async = true, .activate = cons.task_rx_south_id });
 }
+
+
+// --- FIFO CONSUMER ---
+task process_fifo() void {
+    if (fifo_count > 0) {
+        // 1. Legge il pacchetto più vecchio dalla coda (Tail)
+        const header = fifo_headers[fifo_tail];
+        const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+        const base_idx = fifo_tail * cons.MAX_PAYLOAD;
+
+        // 2. Ricopia i dati dalla FIFO nei buffer standard che la tua matematica si aspetta
+        if (msg_type == @as(u32, cons.MSG_P2P)) {
+            var src_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> fifo_payloads[i] });
+            src_dsd = @set_dsd_base_addr(src_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            
+            const dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> p2p_rx_payload[i] });
+            @fmovs(dest_dsd, src_dsd);
+        } else {
+            var src_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> fifo_payloads[i] });
+            src_dsd = @set_dsd_base_addr(src_dsd, @ptrcast([*]f32, &fifo_payloads[base_idx]));
+            
+            const dest_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.C_BUF_SIZE} -> rx_payload[i] });
+            @fmovs(dest_dsd, src_dsd);
+        }
+
+        // 3. Chiama il tuo switchboard originale (che ora lavorerà tranquillo sui buffer in RAM)
+        process_packet_local(header);
+
+        // 4. Aggiorna la coda (libera lo slot)
+        fifo_tail = (fifo_tail + 1) % cons.FIFO_DEPTH;
+        fifo_count -= 1;
+
+        // 5. Se ci sono altri pacchetti parcheggiati, auto-riattivazione!
+        if (fifo_count > 0) {
+            @activate(cons.process_fifo_task_id);
+        }
+    }
+}
+
+
+// --- POINTERS ---
+var ptr_bodies: [*]u32 = &bodies;
+var ptr_forces_buf: [*]f32 = &forces_buf;
+var ptr_fmm_done: [*]u32 = &fmm_done;
+
+var ptr_m2m_offsets: [*]u16 = &m2m_offsets;
+var ptr_m2m_child_indices: [*]u16 = &m2m_child_indices;
+var ptr_m2m_v_indices: [*]u16 = &m2m_v_indices;
+var ptr_m2m_sign_rr: [*]f32 = &m2m_sign_rr;
+var ptr_m2m_sign_ri: [*]f32 = &m2m_sign_ri;
+var ptr_m2m_sign_ir: [*]f32 = &m2m_sign_ir;
+var ptr_m2m_sign_ii: [*]f32 = &m2m_sign_ii;
+
+var ptr_m2l_offsets: [*]u16 = &m2l_offsets;
+var ptr_m2l_source_indices: [*]u16 = &m2l_source_indices;
+var ptr_m2l_v_indices: [*]u16 = &m2l_v_indices;
+var ptr_m2l_sign_rr: [*]f32 = &m2l_sign_rr;
+var ptr_m2l_sign_ri: [*]f32 = &m2l_sign_ri;
+var ptr_m2l_sign_ir: [*]f32 = &m2l_sign_ir;
+var ptr_m2l_sign_ii: [*]f32 = &m2l_sign_ii;
+
+var ptr_l2l_offsets: [*]u16 = &l2l_offsets;
+var ptr_l2l_source_indices: [*]u16 = &l2l_source_indices;
+var ptr_l2l_v_indices: [*]u16 = &l2l_v_indices;
+var ptr_l2l_sign_rr: [*]f32 = &l2l_sign_rr;
+var ptr_l2l_sign_ri: [*]f32 = &l2l_sign_ri;
+var ptr_l2l_sign_ir: [*]f32 = &l2l_sign_ir;
+var ptr_l2l_sign_ii: [*]f32 = &l2l_sign_ii;
+
+var ptr_m2l_agenda_lvl2: [*]u32 = &m2l_agenda_lvl2;
+var ptr_m2l_agenda_lvl3: [*]u32 = &m2l_agenda_lvl3;
+var ptr_m2l_agenda_lvl4: [*]u32 = &m2l_agenda_lvl4;
+var ptr_num_targets_lvl2: [*]u32 = &num_targets_lvl2;
+var ptr_num_targets_lvl3: [*]u32 = &num_targets_lvl3;
+var ptr_num_targets_lvl4: [*]u32 = &num_targets_lvl4;
+var ptr_expected_rx_lvl2: [*]u32 = &expected_rx_lvl2;
+var ptr_expected_rx_lvl3: [*]u32 = &expected_rx_lvl3;
+var ptr_expected_rx_lvl4: [*]u32 = &expected_rx_lvl4;
+
+var ptr_p2p_agenda: [*]u32 = &p2p_agenda;
+var ptr_num_p2p_neighbors: [*]u32 = &num_p2p_neighbors;
 
 
 // --- COMPTIME ---
@@ -684,58 +1158,54 @@ comptime {
     @bind_local_task(rx_west, cons.task_rx_west_id);
     @bind_local_task(rx_north, cons.task_rx_north_id);
     @bind_local_task(rx_south, cons.task_rx_south_id);
-
     @bind_local_task(self_rx, cons.task_self_rx_id);
+
     @bind_local_task(m2l_send_task, cons.m2l_send_task_id);
-}
 
-layout {
-    @export_name("start_fmm", fn()void);
+    @bind_local_task(process_fifo, cons.process_fifo_task_id);
 
-    @export_name("bodies", [*]u32);
+    // Symbol exports
+    @export_symbol(ptr_bodies, "ptr_bodies");
+    @export_symbol(ptr_forces_buf, "ptr_forces_buf");
+    @export_symbol(ptr_fmm_done, "ptr_fmm_done");
+    @export_symbol(start_fmm, "start_fmm");
 
-    // --- M2M TABLES ---
-    @export_name("m2m_offsets",        [*]u16);
-    @export_name("m2m_child_indices",  [*]u16);
-    @export_name("m2m_v_indices",      [*]u16);
-    @export_name("m2m_sign_rr",        [*]f32);
-    @export_name("m2m_sign_ri",        [*]f32);
-    @export_name("m2m_sign_ir",        [*]f32);
-    @export_name("m2m_sign_ii",        [*]f32);
+    @export_symbol(ptr_canarino, "ptr_canarino");
 
-    // --- M2L TABLES ---
-    @export_name("m2l_offsets",        [*]u16);
-    @export_name("m2l_source_indices", [*]u16);
-    @export_name("m2l_v_indices",      [*]u16);
-    @export_name("m2l_sign_rr",        [*]f32);
-    @export_name("m2l_sign_ri",        [*]f32);
-    @export_name("m2l_sign_ir",        [*]f32);
-    @export_name("m2l_sign_ii",        [*]f32);
+    @export_symbol(ptr_m2m_offsets, "ptr_m2m_offsets");
+    @export_symbol(ptr_m2m_child_indices, "ptr_m2m_child_indices");
+    @export_symbol(ptr_m2m_v_indices, "ptr_m2m_v_indices");
+    @export_symbol(ptr_m2m_sign_rr, "ptr_m2m_sign_rr");
+    @export_symbol(ptr_m2m_sign_ri, "ptr_m2m_sign_ri");
+    @export_symbol(ptr_m2m_sign_ir, "ptr_m2m_sign_ir");
+    @export_symbol(ptr_m2m_sign_ii, "ptr_m2m_sign_ii");
 
-    // --- L2L TABLES ---
-    @export_name("l2l_offsets",        [*]u16);
-    @export_name("l2l_source_indices", [*]u16);
-    @export_name("l2l_v_indices",      [*]u16);
-    @export_name("l2l_sign_rr",        [*]f32);
-    @export_name("l2l_sign_ri",        [*]f32);
-    @export_name("l2l_sign_ir",        [*]f32);
-    @export_name("l2l_sign_ii",        [*]f32);
+    @export_symbol(ptr_m2l_offsets, "ptr_m2l_offsets");
+    @export_symbol(ptr_m2l_source_indices, "ptr_m2l_source_indices");
+    @export_symbol(ptr_m2l_v_indices, "ptr_m2l_v_indices");
+    @export_symbol(ptr_m2l_sign_rr, "ptr_m2l_sign_rr");
+    @export_symbol(ptr_m2l_sign_ri, "ptr_m2l_sign_ri");
+    @export_symbol(ptr_m2l_sign_ir, "ptr_m2l_sign_ir");
+    @export_symbol(ptr_m2l_sign_ii, "ptr_m2l_sign_ii");
 
-    // --- AGENDAS and COUNTERS ---
-    @export_name("m2l_agenda_lvl2", [*]u32);
-    @export_name("m2l_agenda_lvl3", [*]u32);
-    @export_name("m2l_agenda_lvl4", [*]u32);
-    @export_name("m2l_agenda_lvl5", [*]u32);
-    @export_name("num_targets_lvl2", [*]u32);
-    @export_name("num_targets_lvl3", [*]u32);
-    @export_name("num_targets_lvl4", [*]u32);
-    @export_name("num_targets_lvl5", [*]u32);
+    @export_symbol(ptr_l2l_offsets, "ptr_l2l_offsets");
+    @export_symbol(ptr_l2l_source_indices, "ptr_l2l_source_indices");
+    @export_symbol(ptr_l2l_v_indices, "ptr_l2l_v_indices");
+    @export_symbol(ptr_l2l_sign_rr, "ptr_l2l_sign_rr");
+    @export_symbol(ptr_l2l_sign_ri, "ptr_l2l_sign_ri");
+    @export_symbol(ptr_l2l_sign_ir, "ptr_l2l_sign_ir");
+    @export_symbol(ptr_l2l_sign_ii, "ptr_l2l_sign_ii");
 
-    @export_name("expected_rx_lvl2", [*]u32);
-    @export_name("expected_rx_lvl3", [*]u32);
-    @export_name("expected_rx_lvl4", [*]u32);
-    @export_name("expected_rx_lvl5", [*]u32);
+    @export_symbol(ptr_m2l_agenda_lvl2, "ptr_m2l_agenda_lvl2");
+    @export_symbol(ptr_m2l_agenda_lvl3, "ptr_m2l_agenda_lvl3");
+    @export_symbol(ptr_m2l_agenda_lvl4, "ptr_m2l_agenda_lvl4");
+    @export_symbol(ptr_num_targets_lvl2, "ptr_num_targets_lvl2");
+    @export_symbol(ptr_num_targets_lvl3, "ptr_num_targets_lvl3");
+    @export_symbol(ptr_num_targets_lvl4, "ptr_num_targets_lvl4");
+    @export_symbol(ptr_expected_rx_lvl2, "ptr_expected_rx_lvl2");
+    @export_symbol(ptr_expected_rx_lvl3, "ptr_expected_rx_lvl3");
+    @export_symbol(ptr_expected_rx_lvl4, "ptr_expected_rx_lvl4");
 
-    // --- RESULTS ---
-    @export_name("forces_buf", [*]f32);
+    @export_symbol(ptr_p2p_agenda, "ptr_p2p_agenda");
+    @export_symbol(ptr_num_p2p_neighbors, "ptr_num_p2p_neighbors");
 }

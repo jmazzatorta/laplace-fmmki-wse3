@@ -1,18 +1,19 @@
 // kernels.csl
 
-param P: u16; // 8
+param P: u16;
+param M2M_N_ENTRIES: u16;
+param M2L_N_ENTRIES: u16;
+param L2L_N_ENTRIES: u16;
+param N_BUCKETS: u16;
+param P2P_PAYLOAD_SIZE: u16;
 
-const N_COEFFS: u16 = (P + 1) * (P + 2) / 2;      // 45
-const C_BUF_SIZE: u16 = N_COEFFS * 2;             // 90
+const N_COEFFS: u16 = (P + 1) * (P + 2) / 2;
+const C_BUF_SIZE: u16 = N_COEFFS * 2;
 
-const N_COEFFS_M2L: u16 = (2*P+1) * (2*P+2) / 2;  // 153 
-const C_BUF_M2L_SIZE: u16 = N_COEFFS_M2L * 2;     // 306
+const N_COEFFS_M2L: u16 = (2*P+1) * (2*P+2) / 2;
+const C_BUF_M2L_SIZE: u16 = N_COEFFS_M2L * 2;
 
-const N_BUCKETS: u16 = N_COEFFS + 1;              // 46
-
-const M2M_N_ENTRIES: u16 = 755;
-const M2L_N_ENTRIES: u16 = 3645;
-const L2L_N_ENTRIES: u16 = 755;
+const math = @import_module("<math>");
 
 // --- Solid Harmonics Computation ---
 
@@ -272,7 +273,7 @@ fn l2l_translate(
 }
 
 
-// --- Local-to-Particle (L2P) Evaluation ---
+// --- L2P Evaluation ---
 
 fn evaluate_l2p(
     dx: f32, dy: f32, dz: f32,
@@ -285,16 +286,17 @@ fn evaluate_l2p(
 
     var p_acc: f32 = 0.0;
 
-    for (@range(u16, N_COEFFS)) |i| {
-        const idx = i * 2;
-        
-        const l_r = l_coeffs.*[idx];
-        const l_i = l_coeffs.*[idx + 1];
-        
-        const r_r = r_buf[idx];
-        const r_i = r_buf[idx + 1];
-
-        p_acc += (l_r * r_r - l_i * r_i);
+    var idx: u16 = 0;
+    for (@range(u16, P + 1)) |m| {
+        const w: f32 = if (m == 0) 1.0 else 2.0;
+        for (@range(u16, m, P + 1, 1)) |l| {
+            const l_r = l_coeffs.*[idx * 2];
+            const l_i = l_coeffs.*[idx * 2 + 1];
+            const r_r = r_buf[idx * 2];
+            const r_i = r_buf[idx * 2 + 1];
+            p_acc += w * (l_r * r_r - l_i * r_i);
+            idx += 1;
+        }
     }
 
     pot.* = p_acc;
@@ -304,4 +306,47 @@ fn evaluate_l2p(
     fx.* = 0.0;
     fy.* = 0.0;
     fz.* = 0.0;
+}
+
+
+// --- P2P Evaluation ---
+fn evaluate_p2p(
+    target_x: f32, target_y: f32, target_z: f32,
+    remote_bodies: *[P2P_PAYLOAD_SIZE]f32,
+    remote_count: u16,
+    fx_out: *f32, fy_out: *f32, fz_out: *f32, pot_out: *f32
+) void {
+    var fx: f32 = 0.0;
+    var fy: f32 = 0.0;
+    var fz: f32 = 0.0;
+    var pot: f32 = 0.0;
+    
+    for (@range(u16, remote_count)) |i| {
+        const base: u16 = i * 4;
+        const rx: f32 = remote_bodies.*[base];
+        const ry: f32 = remote_bodies.*[base + 1];
+        const rz: f32 = remote_bodies.*[base + 2];
+        const rq: f32 = remote_bodies.*[base + 3];
+        
+        const dx = rx - target_x;
+        const dy = ry - target_y;
+        const dz = rz - target_z;
+        
+        const r2 = dx * dx + dy * dy + dz * dz;
+        if (r2 > 1e-10) {
+            const r_inv = 1.0 / math.sqrt(r2);
+            const r_inv3 = r_inv * r_inv * r_inv;
+            
+            const f_factor = rq * r_inv3;
+            fx += f_factor * dx;
+            fy += f_factor * dy;
+            fz += f_factor * dz;
+            pot += rq * r_inv;
+        }
+    }
+    
+    fx_out.* = fx;
+    fy_out.* = fy;
+    fz_out.* = fz;
+    pot_out.* = pot;
 }
