@@ -7,7 +7,7 @@ cslc --arch=wse3 ./layout.csl \
   --params=max_bodies_pe:5 \
   --params=MEMCPY_H2D_ID:0 \
   --params=MEMCPY_D2H_ID:1 \
-  --max-inlined-iterations 500 \
+  --max-inlined-iterations 700 \
   -o out --memcpy --channels 1
 
 # cs_python run.py --name out
