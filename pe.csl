@@ -1149,20 +1149,26 @@ task process_fifo() void {
 
 
 // --- ASYNC TX DRAINERS ---
+
+// EAST
 task tx_drain_e() void {
     if (tx_drain_e_busy == 1) return;
     if (tx_fifo_e_count == 0) return;
     
     tx_drain_e_busy = 1;
     const header = tx_fifo_e_headers[tx_fifo_e_tail];
+    tx_header_buf_e[0] = header;
+    const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf_e[i] });
+    
+    // Step 1: Invia Header Async e incatena il Payload
+    @fmovs(tx_hdr_e, mem_tx_header_dsd, .{ .async = true, .activate = cons.tx_send_pld_e_task_id }); 
+}
+task tx_send_pld_e() void {
+    const header = tx_fifo_e_headers[tx_fifo_e_tail];
     const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
     const base_idx = tx_fifo_e_tail * cons.MAX_PAYLOAD;
 
-    // Buffer isolato per l'Est
-    tx_header_buf_e[0] = header;
-    const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf_e[i] });
-    @fmovs(tx_hdr_e, mem_tx_header_dsd); // Sync Header
-
+    // Step 2: Invia Payload Async e incatena il Complete
     if (msg_type == @as(u32, cons.MSG_P2P)) {
         var src_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> tx_fifo_e_payloads[i] });
         src_dsd = @set_dsd_base_addr(src_dsd, @ptrcast([*]f32, &tx_fifo_e_payloads[base_idx]));
@@ -1174,25 +1180,30 @@ task tx_drain_e() void {
     }
 }
 task tx_complete_e() void {
+    // Step 3: Pulisci e riavvia se c'è coda
     tx_fifo_e_tail = (tx_fifo_e_tail + 1) & (cons.FIFO_DEPTH - 1);
     tx_fifo_e_count -= 1;
     tx_drain_e_busy = 0;
     if (tx_fifo_e_count > 0) @activate(cons.tx_drain_e_task_id);
 }
 
+// WEST
 task tx_drain_w() void {
     if (tx_drain_w_busy == 1) return;
     if (tx_fifo_w_count == 0) return;
     
     tx_drain_w_busy = 1;
     const header = tx_fifo_w_headers[tx_fifo_w_tail];
-    const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
-    const base_idx = tx_fifo_w_tail * cons.MAX_PAYLOAD;
-
-    // Buffer isolato per l'Ovest
     tx_header_buf_w[0] = header;
     const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf_w[i] });
-    @fmovs(tx_hdr_w, mem_tx_header_dsd);
+    
+    @fmovs(tx_hdr_w, mem_tx_header_dsd, .{ .async = true, .activate = cons.tx_send_pld_w_task_id });
+}
+
+task tx_send_pld_w() void {
+    const header = tx_fifo_w_headers[tx_fifo_w_tail];
+    const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+    const base_idx = tx_fifo_w_tail * cons.MAX_PAYLOAD;
 
     if (msg_type == @as(u32, cons.MSG_P2P)) {
         var src_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> tx_fifo_w_payloads[i] });
@@ -1204,6 +1215,7 @@ task tx_drain_w() void {
         @fmovs(tx_payload_w, src_dsd, .{ .async = true, .activate = cons.tx_complete_w_task_id });
     }
 }
+
 task tx_complete_w() void {
     tx_fifo_w_tail = (tx_fifo_w_tail + 1) & (cons.FIFO_DEPTH - 1);
     tx_fifo_w_count -= 1;
@@ -1211,19 +1223,22 @@ task tx_complete_w() void {
     if (tx_fifo_w_count > 0) @activate(cons.tx_drain_w_task_id);
 }
 
+// NORTH 
 task tx_drain_n() void {
     if (tx_drain_n_busy == 1) return;
     if (tx_fifo_n_count == 0) return;
     
     tx_drain_n_busy = 1;
     const header = tx_fifo_n_headers[tx_fifo_n_tail];
-    const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
-    const base_idx = tx_fifo_n_tail * cons.MAX_PAYLOAD;
-
-    // Buffer isolato per il Nord
     tx_header_buf_n[0] = header;
     const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf_n[i] });
-    @fmovs(tx_hdr_n, mem_tx_header_dsd);
+    
+    @fmovs(tx_hdr_n, mem_tx_header_dsd, .{ .async = true, .activate = cons.tx_send_pld_n_task_id });
+}
+task tx_send_pld_n() void {
+    const header = tx_fifo_n_headers[tx_fifo_n_tail];
+    const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+    const base_idx = tx_fifo_n_tail * cons.MAX_PAYLOAD;
 
     if (msg_type == @as(u32, cons.MSG_P2P)) {
         var src_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> tx_fifo_n_payloads[i] });
@@ -1242,19 +1257,22 @@ task tx_complete_n() void {
     if (tx_fifo_n_count > 0) @activate(cons.tx_drain_n_task_id);
 }
 
+// SOUTH 
 task tx_drain_s() void {
     if (tx_drain_s_busy == 1) return;
     if (tx_fifo_s_count == 0) return;
     
     tx_drain_s_busy = 1;
     const header = tx_fifo_s_headers[tx_fifo_s_tail];
-    const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
-    const base_idx = tx_fifo_s_tail * cons.MAX_PAYLOAD;
-
-    // Buffer isolato per il Sud
     tx_header_buf_s[0] = header;
     const mem_tx_header_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tx_header_buf_s[i] });
-    @fmovs(tx_hdr_s, mem_tx_header_dsd);
+    
+    @fmovs(tx_hdr_s, mem_tx_header_dsd, .{ .async = true, .activate = cons.tx_send_pld_s_task_id });
+}
+task tx_send_pld_s() void {
+    const header = tx_fifo_s_headers[tx_fifo_s_tail];
+    const msg_type = (header >> cons.SHIFT_MSG_TYPE) & cons.MASK_3BIT;
+    const base_idx = tx_fifo_s_tail * cons.MAX_PAYLOAD;
 
     if (msg_type == @as(u32, cons.MSG_P2P)) {
         var src_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{cons.P2P_PAYLOAD_SIZE} -> tx_fifo_s_payloads[i] });
@@ -1346,10 +1364,16 @@ comptime {
     @bind_local_task(tx_drain_w, cons.tx_drain_w_task_id);
     @bind_local_task(tx_drain_n, cons.tx_drain_n_task_id);
     @bind_local_task(tx_drain_s, cons.tx_drain_s_task_id);
+
     @bind_local_task(tx_complete_e, cons.tx_complete_e_task_id);
     @bind_local_task(tx_complete_w, cons.tx_complete_w_task_id);
     @bind_local_task(tx_complete_n, cons.tx_complete_n_task_id);
     @bind_local_task(tx_complete_s, cons.tx_complete_s_task_id);
+
+    @bind_local_task(tx_send_pld_e, cons.tx_send_pld_e_task_id);
+    @bind_local_task(tx_send_pld_w, cons.tx_send_pld_w_task_id);
+    @bind_local_task(tx_send_pld_n, cons.tx_send_pld_n_task_id);
+    @bind_local_task(tx_send_pld_s, cons.tx_send_pld_s_task_id);
 
     // Symbol exports
     @export_symbol(ptr_bodies, "ptr_bodies");

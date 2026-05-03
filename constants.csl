@@ -104,3 +104,8 @@ const tx_complete_e_task_id: local_task_id = @get_local_task_id(22);
 const tx_complete_w_task_id: local_task_id = @get_local_task_id(23);
 const tx_complete_n_task_id: local_task_id = @get_local_task_id(24);
 const tx_complete_s_task_id: local_task_id = @get_local_task_id(25);
+
+const tx_send_pld_e_task_id: local_task_id = @get_local_task_id(26);
+const tx_send_pld_w_task_id: local_task_id = @get_local_task_id(29);
+const tx_send_pld_n_task_id: local_task_id = @get_local_task_id(30);
+const tx_send_pld_s_task_id: local_task_id = @get_local_task_id(31);
