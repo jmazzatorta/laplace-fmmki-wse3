@@ -95,17 +95,13 @@ const l2l_send_task_id: local_task_id = @get_local_task_id(14);
 const p2m_compute_task_id: local_task_id = @get_local_task_id(15);
 
 const process_fifo_task_id: local_task_id = @get_local_task_id(16);
-const tx_drain_e_task_id: local_task_id = @get_local_task_id(17);
-const tx_drain_w_task_id: local_task_id = @get_local_task_id(18);
-const tx_drain_n_task_id: local_task_id = @get_local_task_id(19);
-const tx_drain_s_task_id: local_task_id = @get_local_task_id(20);
+
+const tx_engine_e_task_id: local_task_id = @get_local_task_id(17);
+const tx_engine_w_task_id: local_task_id = @get_local_task_id(18);
+const tx_engine_n_task_id: local_task_id = @get_local_task_id(19);
+const tx_engine_s_task_id: local_task_id = @get_local_task_id(20);
 
 const tx_complete_e_task_id: local_task_id = @get_local_task_id(22);
 const tx_complete_w_task_id: local_task_id = @get_local_task_id(23);
 const tx_complete_n_task_id: local_task_id = @get_local_task_id(24);
 const tx_complete_s_task_id: local_task_id = @get_local_task_id(25);
-
-const tx_send_pld_e_task_id: local_task_id = @get_local_task_id(26);
-const tx_send_pld_w_task_id: local_task_id = @get_local_task_id(29);
-const tx_send_pld_n_task_id: local_task_id = @get_local_task_id(30);
-const tx_send_pld_s_task_id: local_task_id = @get_local_task_id(31);
